@@ -55,11 +55,17 @@ class AudioService:
         output_path = self.clips_dir / filename
 
         # Build FFmpeg command
+        # Using hybrid seeking: fast seek to ~10s before start, then accurate seek
+        # This gives both speed and millisecond precision
+        fast_seek = max(0, start_time - 10)  # Seek to 10s before for safety margin
+        accurate_seek = start_time - fast_seek  # Remaining time for accurate seek
+        
         cmd = [
             'ffmpeg',
             '-y',  # Overwrite output file if exists
-            '-ss', str(start_time),  # Start time (before input for fast seek)
+            '-ss', str(fast_seek),  # Fast seek to approximate position (before -i)
             '-i', str(input_path),  # Input file
+            '-ss', str(accurate_seek),  # Accurate seek from there (after -i)
             '-t', str(duration),  # Duration
             '-vn',  # No video
             '-acodec', self._get_codec(output_format),

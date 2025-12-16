@@ -24,9 +24,14 @@ interface DirectoryListing {
   files: FileInfo[]
 }
 
+// Ensure path ends with slash for directories
+const ensureTrailingSlash = (path: string): string => {
+  return path.endsWith('/') ? path : path + '/'
+}
+
 // State
 const currentPath = ref(props.initialPath || '/mnt')
-const pathInput = ref(props.initialPath || '/mnt')
+const pathInput = ref(ensureTrailingSlash(props.initialPath || '/mnt'))
 const listing = ref<DirectoryListing | null>(null)
 const loading = ref(true)
 const error = ref<string | null>(null)
@@ -110,7 +115,7 @@ const loadDirectory = async (path: string, updateInput = true) => {
     listing.value = await response.json()
     currentPath.value = path
     if (updateInput) {
-      pathInput.value = path
+      pathInput.value = ensureTrailingSlash(path)
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load directory'
@@ -182,6 +187,17 @@ const loadAutocomplete = async (inputPath: string) => {
 
 // Handle path input changes
 const onPathInputChange = () => {
+  loadAutocomplete(pathInput.value)
+}
+
+// Handle focus - move cursor to end
+const onPathFocus = () => {
+  nextTick(() => {
+    if (pathInputRef.value) {
+      const len = pathInputRef.value.value.length
+      pathInputRef.value.setSelectionRange(len, len)
+    }
+  })
   loadAutocomplete(pathInput.value)
 }
 
@@ -287,7 +303,7 @@ const navigateToPath = (path: string) => {
 // Navigate to directory (from UI clicks - no autocomplete)
 const navigateTo = (path: string) => {
   showAutocomplete.value = false
-  pathInput.value = path
+  pathInput.value = ensureTrailingSlash(path)
   loadDirectory(path)
 }
 
@@ -334,6 +350,15 @@ onMounted(() => {
   document.addEventListener('click', onClickOutside)
 })
 
+// Watch for initialPath changes (e.g., loaded from localStorage)
+watch(() => props.initialPath, (newPath) => {
+  if (newPath && newPath !== currentPath.value) {
+    currentPath.value = newPath
+    pathInput.value = ensureTrailingSlash(newPath)
+    loadDirectory(newPath)
+  }
+})
+
 // Watch for input changes with debounce
 let debounceTimer: number | null = null
 watch(pathInput, (newVal) => {
@@ -368,7 +393,7 @@ watch(pathInput, (newVal) => {
             class="input font-mono text-sm pr-10"
             placeholder="/path/to/directory"
             @keydown="onPathKeydown"
-            @focus="loadAutocomplete(pathInput)"
+            @focus="onPathFocus"
             spellcheck="false"
             autocomplete="off"
           />
