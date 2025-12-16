@@ -93,6 +93,8 @@
             export DATA_DIR="$PWD/data"
             export RECORDINGS_DIR="$PWD/data/recordings"
             export CLIPS_DIR="$PWD/data/clips"
+            export BACKEND_PORT="''${BACKEND_PORT:-8847}"
+            export FRONTEND_PORT="''${FRONTEND_PORT:-8848}"
             
             mkdir -p $DATA_DIR $RECORDINGS_DIR $CLIPS_DIR
             
@@ -101,9 +103,11 @@
             echo "  Node: $(node --version)"
             echo "  FFmpeg: $(ffmpeg -version 2>&1 | head -n1)"
             echo ""
+            echo "Ports: Backend=$BACKEND_PORT, Frontend=$FRONTEND_PORT"
+            echo ""
             echo "To start development:"
-            echo "  Backend:  cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
-            echo "  Frontend: cd frontend && npm install && npm run dev -- --host 0.0.0.0"
+            echo "  Backend:  cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port $BACKEND_PORT"
+            echo "  Frontend: cd frontend && npm install && npm run dev -- --host 0.0.0.0 --port $FRONTEND_PORT"
           '';
         };
         
@@ -130,10 +134,16 @@
               description = "Host to bind to";
             };
             
-            port = mkOption {
+            backendPort = mkOption {
               type = types.port;
-              default = 8000;
-              description = "Port to listen on";
+              default = 8847;
+              description = "Backend API port";
+            };
+            
+            frontendPort = mkOption {
+              type = types.port;
+              default = 8848;
+              description = "Frontend dev server port";
             };
             
             dataDir = mkOption {
@@ -187,7 +197,7 @@
                 User = cfg.user;
                 Group = cfg.group;
                 WorkingDirectory = cfg.dataDir;
-                ExecStart = "${pkgs.python311Packages.uvicorn}/bin/uvicorn app.main:app --host ${cfg.host} --port ${toString cfg.port}";
+                ExecStart = "${pkgs.python311Packages.uvicorn}/bin/uvicorn app.main:app --host ${cfg.host} --port ${toString cfg.backendPort}";
                 Restart = "on-failure";
                 RestartSec = 5;
                 

@@ -1,6 +1,5 @@
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -39,8 +38,10 @@ async def upload_recording(
         'audio/webm': '.webm',
         'audio/ogg': '.ogg',
         'audio/wav': '.wav',
+        'audio/wave': '.wav',
         'audio/mp3': '.mp3',
         'audio/mpeg': '.mp3',
+        'audio/mp4': '.m4a',
     }
     extension = ext_map.get(content_type, '.webm')
     
@@ -134,6 +135,7 @@ async def get_recording(filename: str):
         '.ogg': 'audio/ogg',
         '.wav': 'audio/wav',
         '.mp3': 'audio/mpeg',
+        '.m4a': 'audio/mp4',
     }
     media_type = ext_to_media.get(filepath.suffix, 'audio/webm')
     

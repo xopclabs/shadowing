@@ -6,6 +6,10 @@
     DATA_DIR = "${config.env.DEVENV_ROOT}/data";
     RECORDINGS_DIR = "${config.env.DEVENV_ROOT}/data/recordings";
     CLIPS_DIR = "${config.env.DEVENV_ROOT}/data/clips";
+    
+    # Ports - change these if needed
+    BACKEND_PORT = "8847";
+    FRONTEND_PORT = "8848";
   };
 
   # System packages
@@ -38,12 +42,14 @@
     echo "  - Python: $(python --version)"
     echo "  - Node: $(node --version)"
     echo "  - FFmpeg: $(ffmpeg -version | head -n1)"
+    echo ""
+    echo "Ports: Backend=$BACKEND_PORT, Frontend=$FRONTEND_PORT"
   '';
 
   # Process management for development
   processes = {
-    backend.exec = "cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000";
-    frontend.exec = "cd frontend && npm install && npm run dev -- --host 0.0.0.0";
+    backend.exec = "cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port $BACKEND_PORT";
+    frontend.exec = "cd frontend && npm install && npm run dev -- --host 0.0.0.0 --port $FRONTEND_PORT";
   };
 
   # Pre-commit hooks (optional but nice)
@@ -52,4 +58,3 @@
     prettier.enable = true;
   };
 }
-
