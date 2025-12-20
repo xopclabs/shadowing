@@ -1,14 +1,18 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, nextTick } from "vue";
+import { ref, watch, onMounted, nextTick, computed } from "vue";
+import { useSettingsStore } from "@/stores/settings";
 
 const props = defineProps<{
   audioUrl: string;
-  maxDuration?: number; // If provided, scale spectrogram to this duration
+  maxDuration?: number; // If provided, scale visualization to this duration
 }>();
 
 const emit = defineEmits<{
   (e: "duration", duration: number): void;
 }>();
+
+const settingsStore = useSettingsStore();
+const displayMode = computed(() => settingsStore.displayMode);
 
 // Canvas refs
 const canvasRef = ref<HTMLCanvasElement | null>(null);
@@ -105,6 +109,109 @@ const getColorForValue = (value: number): [number, number, number] => {
 
 // Background color for padding (matches spectrogram's darkest color at v=0)
 const BG_COLOR: [number, number, number] = [10, 0, 30];
+
+// Waveform colors
+const WAVEFORM_BG: [number, number, number] = [10, 0, 30];
+const WAVEFORM_COLOR: [number, number, number] = [255, 180, 100]; // sol-400 ish
+
+const generateWaveform = async () => {
+  await nextTick();
+
+  if (!canvasRef.value) {
+    console.error("Waveform: Canvas ref is null");
+    return;
+  }
+
+  isAnalyzing.value = true;
+  error.value = null;
+
+  const canvas = canvasRef.value;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  let audioContext: AudioContext | null = null;
+
+  try {
+    const response = await fetch(props.audioUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to load audio: ${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+
+    audioContext = new (window.AudioContext ||
+      (window as any).webkitAudioContext)();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+    audioDuration.value = audioBuffer.duration;
+    emit("duration", audioBuffer.duration);
+
+    const channelData = audioBuffer.getChannelData(0);
+
+    const maxWidth = 800;
+    const maxHeight = 200;
+
+    // Calculate width based on maxDuration if provided
+    const durationRatio = props.maxDuration
+      ? audioBuffer.duration / props.maxDuration
+      : 1;
+    const displayWidth = maxWidth;
+    const waveformWidth = Math.floor(maxWidth * durationRatio);
+    const displayHeight = maxHeight;
+
+    canvas.width = displayWidth;
+    canvas.height = displayHeight;
+
+    // Fill background
+    ctx.fillStyle = `rgb(${WAVEFORM_BG[0]}, ${WAVEFORM_BG[1]}, ${WAVEFORM_BG[2]})`;
+    ctx.fillRect(0, 0, displayWidth, displayHeight);
+
+    // Calculate samples per pixel
+    const samplesPerPixel = Math.floor(channelData.length / waveformWidth);
+    const centerY = displayHeight / 2;
+
+    // Draw waveform
+    ctx.fillStyle = `rgb(${WAVEFORM_COLOR[0]}, ${WAVEFORM_COLOR[1]}, ${WAVEFORM_COLOR[2]})`;
+
+    for (let x = 0; x < waveformWidth; x++) {
+      const startSample = x * samplesPerPixel;
+      const endSample = Math.min(
+        startSample + samplesPerPixel,
+        channelData.length,
+      );
+
+      let min = 0;
+      let max = 0;
+
+      for (let i = startSample; i < endSample; i++) {
+        const sample = channelData[i];
+        if (sample < min) min = sample;
+        if (sample > max) max = sample;
+      }
+
+      // Scale to canvas height (leave some padding)
+      const amplitude = Math.max(Math.abs(min), Math.abs(max));
+      const barHeight = amplitude * (displayHeight * 0.85);
+
+      // Draw centered bar
+      ctx.fillRect(x, centerY - barHeight / 2, 1, Math.max(1, barHeight));
+    }
+  } catch (e) {
+    console.error("Waveform generation failed:", e);
+    error.value = `Failed: ${e instanceof Error ? e.message : String(e)}`;
+
+    canvas.width = 300;
+    canvas.height = 100;
+    ctx.fillStyle = "#394053";
+    ctx.fillRect(0, 0, 300, 100);
+  } finally {
+    isAnalyzing.value = false;
+
+    if (audioContext && audioContext.state !== "closed") {
+      audioContext.close();
+    }
+  }
+};
 
 const generateSpectrogram = async () => {
   await nextTick();
@@ -250,9 +357,19 @@ const generateSpectrogram = async () => {
   }
 };
 
+const generateVisualization = () => {
+  if (!props.audioUrl) return;
+
+  if (displayMode.value === "waveform") {
+    generateWaveform();
+  } else {
+    generateSpectrogram();
+  }
+};
+
 onMounted(() => {
   if (props.audioUrl) {
-    generateSpectrogram();
+    generateVisualization();
   }
 });
 
@@ -260,7 +377,7 @@ watch(
   () => props.audioUrl,
   (newUrl) => {
     if (newUrl) {
-      generateSpectrogram();
+      generateVisualization();
     }
   },
 );
@@ -270,10 +387,17 @@ watch(
   () => props.maxDuration,
   () => {
     if (props.audioUrl) {
-      generateSpectrogram();
+      generateVisualization();
     }
   },
 );
+
+// Re-render if display mode changes
+watch(displayMode, () => {
+  if (props.audioUrl) {
+    generateVisualization();
+  }
+});
 </script>
 
 <template>
@@ -298,7 +422,7 @@ watch(
       v-if="error && !isAnalyzing"
       class="absolute inset-0 flex items-center justify-center bg-noche-800 rounded-lg"
     >
-      <span class="text-xs text-noche-500">Spectrogram unavailable</span>
+      <span class="text-xs text-noche-500">Visualization unavailable</span>
     </div>
   </div>
 </template>
