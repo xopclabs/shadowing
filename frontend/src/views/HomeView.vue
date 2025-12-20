@@ -123,21 +123,7 @@ const scrollCarousel = (direction: "left" | "right") => {
 </script>
 
 <template>
-  <div class="space-y-6 max-w-2xl mx-auto">
-    <!-- Header -->
-    <div class="text-center space-y-2">
-      <h1 class="font-display text-3xl font-bold text-noche-100">
-        Practice Your Spanish
-      </h1>
-      <p class="text-noche-400">
-        {{
-          mode === "browse"
-            ? "Select a video file"
-            : "Select the clip to practice"
-        }}
-      </p>
-    </div>
-
+  <div class="space-y-4 max-w-2xl mx-auto">
     <!-- Error Message -->
     <div
       v-if="errorMessage"

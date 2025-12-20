@@ -193,6 +193,19 @@ const seek = (time: number) => {
     videoRef.value.currentTime = clampedTime;
     currentTime.value = clampedTime;
     exitPreviewMode();
+
+    // Adjust timeline if seeked position is outside visible range
+    if (clampedTime < visibleStart.value || clampedTime > visibleEnd.value) {
+      // Center timeline on the seeked position
+      const halfVisible = visibleDuration.value / 2;
+      timelineOffset.value = Math.max(
+        0,
+        Math.min(
+          clampedTime - halfVisible,
+          duration.value - visibleDuration.value,
+        ),
+      );
+    }
   }
 };
 
@@ -543,7 +556,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div class="space-y-2">
     <!-- Video Player -->
     <div
       ref="videoContainerRef"
@@ -582,17 +595,17 @@ onUnmounted(() => {
         v-if="skipIndicatorLeft"
         class="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-1 text-white/80 animate-pulse"
       >
-        <svg class="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+        <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
           <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" />
         </svg>
-        <span class="text-lg font-bold">{{ SKIP_SECONDS }}s</span>
+        <span class="text-sm font-bold">{{ SKIP_SECONDS }}s</span>
       </div>
       <div
         v-if="skipIndicatorRight"
         class="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-1 text-white/80 animate-pulse"
       >
-        <span class="text-lg font-bold">{{ SKIP_SECONDS }}s</span>
-        <svg class="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+        <span class="text-sm font-bold">{{ SKIP_SECONDS }}s</span>
+        <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
           <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
         </svg>
       </div>
@@ -603,10 +616,10 @@ onUnmounted(() => {
         class="absolute inset-0 flex items-center justify-center pointer-events-none"
       >
         <div
-          class="w-16 h-16 rounded-full bg-sol-500/90 flex items-center justify-center shadow-lg"
+          class="w-14 h-14 rounded-full bg-sol-500/90 flex items-center justify-center shadow-lg"
         >
           <svg
-            class="w-8 h-8 text-noche-950 ml-1"
+            class="w-7 h-7 text-noche-950 ml-0.5"
             fill="currentColor"
             viewBox="0 0 24 24"
           >
@@ -614,251 +627,241 @@ onUnmounted(() => {
           </svg>
         </div>
       </div>
-
-      <!-- Video Seekbar -->
-      <div
-        class="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/60 to-transparent"
-      >
-        <div
-          ref="seekbarRef"
-          class="relative h-1 bg-white/30 rounded-full cursor-pointer group"
-          @mousedown="onSeekbarMouseDown"
-        >
-          <!-- Progress -->
-          <div
-            class="absolute top-0 left-0 h-full bg-sol-500 rounded-full"
-            :style="{ width: `${(currentTime / duration) * 100}%` }"
-          />
-          <!-- Selection range indicator on seekbar -->
-          <div
-            v-if="hasSelection"
-            class="absolute top-0 h-full bg-sol-300/50 rounded-full"
-            :style="{
-              left: `${(selectionStart! / duration) * 100}%`,
-              width: `${((selectionEnd! - selectionStart!) / duration) * 100}%`,
-            }"
-          />
-          <!-- Playhead dot -->
-          <div
-            class="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-sol-400 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-            :style="{ left: `calc(${(currentTime / duration) * 100}% - 6px)` }"
-          />
-        </div>
-        <div class="flex justify-between text-xs text-white/70 mt-1">
-          <span>{{ formatTime(currentTime) }}</span>
-          <span>{{ formatTime(duration) }}</span>
-        </div>
-      </div>
     </div>
 
-    <!-- Controls -->
-    <div class="flex items-center justify-center gap-4">
-      <button
-        @click="skipBackward"
-        class="p-3 rounded-xl bg-noche-800 hover:bg-noche-700 transition-colors"
-      >
-        <svg
-          class="w-6 h-6 text-noche-300"
-          fill="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" />
-        </svg>
-      </button>
-      <button
-        @click="togglePlay"
-        class="p-4 rounded-xl bg-sol-500 hover:bg-sol-400 transition-colors"
-      >
-        <svg
-          v-if="!isPlaying"
-          class="w-8 h-8 text-noche-950"
-          fill="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path d="M8 5v14l11-7z" />
-        </svg>
-        <svg
-          v-else
-          class="w-8 h-8 text-noche-950"
-          fill="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <rect x="6" y="4" width="4" height="16" rx="1" />
-          <rect x="14" y="4" width="4" height="16" rx="1" />
-        </svg>
-      </button>
-      <button
-        @click="skipForward"
-        class="p-3 rounded-xl bg-noche-800 hover:bg-noche-700 transition-colors"
-      >
-        <svg
-          class="w-6 h-6 text-noche-300"
-          fill="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
-        </svg>
-      </button>
-    </div>
+    <!-- Compact Control Bar -->
+    <div class="flex items-center gap-2 px-1">
+      <!-- Time display -->
+      <span class="font-mono text-xs text-noche-400 w-20">
+        {{ formatTime(currentTime) }}
+      </span>
 
-    <!-- Timeline (zoomable, not scrollable) -->
-    <div class="space-y-2">
+      <!-- Seekbar -->
       <div
-        class="flex items-center justify-between text-xs text-noche-500 px-1"
+        ref="seekbarRef"
+        class="flex-1 relative h-2 bg-noche-800 rounded-full cursor-pointer group"
+        @mousedown="onSeekbarMouseDown"
       >
-        <span>Scroll to zoom • Drag handles to adjust</span>
-        <div class="flex items-center gap-3">
-          <button
-            @click="centerTimelineOnPlayhead"
-            class="text-noche-400 hover:text-noche-200 transition-colors"
-          >
-            Center
-          </button>
-          <button
-            @click="setSelectionAtCurrentTime"
-            class="text-sol-400 hover:text-sol-300 transition-colors"
-          >
-            Set clip here
-          </button>
-        </div>
-      </div>
-
-      <div
-        ref="timelineRef"
-        class="relative h-20 rounded-lg bg-noche-800 cursor-crosshair select-none overflow-hidden"
-        @mousedown="onTimelineMouseDown"
-        @touchstart="onTimelineTouchStart"
-        @touchmove="onTimelineTouchMove"
-        @touchend="onTimelineTouchEnd"
-        @wheel="onTimelineWheel"
-      >
-        <!-- Time markers -->
         <div
-          v-for="marker in timelineMarkers"
-          :key="marker.time"
-          class="absolute top-0 bottom-0 border-l"
-          :class="marker.isMajor ? 'border-noche-600' : 'border-noche-700'"
-          :style="{
-            left: `${timeToPosition(marker.time, timelineRef?.clientWidth || 300)}px`,
-          }"
-        >
-          <span
-            v-if="marker.isMajor"
-            class="absolute top-1 left-1 text-xs text-noche-500 whitespace-nowrap"
-          >
-            {{ marker.label }}
-          </span>
-        </div>
-
-        <!-- Selection region -->
+          class="absolute top-0 left-0 h-full bg-noche-600 rounded-full"
+          :style="{ width: `${(currentTime / duration) * 100}%` }"
+        />
         <div
           v-if="hasSelection"
-          class="absolute top-0 bottom-0 bg-sol-500/30 border-l-2 border-r-2 border-sol-500"
+          class="absolute top-0 h-full bg-sol-500/40 rounded-full"
           :style="{
-            left: `${timeToPosition(selectionStart!, timelineRef?.clientWidth || 300)}px`,
-            width: `${timeToPosition(selectionEnd!, timelineRef?.clientWidth || 300) - timeToPosition(selectionStart!, timelineRef?.clientWidth || 300)}px`,
+            left: `${(selectionStart! / duration) * 100}%`,
+            width: `${((selectionEnd! - selectionStart!) / duration) * 100}%`,
           }"
-        >
-          <!-- Start Handle -->
-          <div
-            class="absolute left-0 top-0 bottom-0 w-4 -ml-2 bg-sol-500 cursor-ew-resize flex items-center justify-center hover:bg-sol-400 transition-colors"
-          >
-            <div class="w-0.5 h-6 bg-noche-950 rounded-full"></div>
-          </div>
-
-          <!-- End Handle -->
-          <div
-            class="absolute right-0 top-0 bottom-0 w-4 -mr-2 bg-sol-500 cursor-ew-resize flex items-center justify-center hover:bg-sol-400 transition-colors"
-          >
-            <div class="w-0.5 h-6 bg-noche-950 rounded-full"></div>
-          </div>
-
-          <!-- Selection duration label -->
-          <div
-            class="absolute inset-0 flex items-center justify-center pointer-events-none"
-          >
-            <span
-              class="bg-sol-500 text-noche-950 text-xs font-bold px-2 py-0.5 rounded"
-            >
-              {{ selectionDuration }}s
-            </span>
-          </div>
-        </div>
-
-        <!-- Playhead -->
+        />
         <div
-          class="absolute top-0 bottom-0 w-0.5 bg-tierra-400 pointer-events-none z-10"
-          :style="{
-            left: `${timeToPosition(currentTime, timelineRef?.clientWidth || 300)}px`,
-          }"
-        >
-          <div
-            class="absolute -top-1 left-1/2 -translate-x-1/2 w-3 h-3 bg-tierra-400 rounded-full"
-          ></div>
-        </div>
+          class="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-sol-400 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow"
+          :style="{ left: `calc(${(currentTime / duration) * 100}% - 6px)` }"
+        />
+      </div>
 
-        <!-- Zoom level indicator -->
-        <div class="absolute bottom-1 right-2 text-xs text-noche-500">
-          {{ visibleDuration.toFixed(1) }}s visible
-        </div>
+      <!-- Duration -->
+      <span class="font-mono text-xs text-noche-500 w-20 text-right">
+        {{ formatTime(duration) }}
+      </span>
+
+      <!-- Play controls -->
+      <div class="flex items-center gap-1 ml-2">
+        <button
+          @click.stop="skipBackward"
+          class="p-1.5 rounded-lg hover:bg-noche-800 transition-colors"
+        >
+          <svg
+            class="w-4 h-4 text-noche-400"
+            fill="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" />
+          </svg>
+        </button>
+        <button
+          @click.stop="togglePlay"
+          class="p-2 rounded-lg bg-sol-500 hover:bg-sol-400 transition-colors"
+        >
+          <svg
+            v-if="!isPlaying"
+            class="w-4 h-4 text-noche-950"
+            fill="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path d="M8 5v14l11-7z" />
+          </svg>
+          <svg
+            v-else
+            class="w-4 h-4 text-noche-950"
+            fill="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <rect x="6" y="4" width="4" height="16" rx="1" />
+            <rect x="14" y="4" width="4" height="16" rx="1" />
+          </svg>
+        </button>
+        <button
+          @click.stop="skipForward"
+          class="p-1.5 rounded-lg hover:bg-noche-800 transition-colors"
+        >
+          <svg
+            class="w-4 h-4 text-noche-400"
+            fill="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
+          </svg>
+        </button>
       </div>
     </div>
 
-    <!-- Selection info -->
+    <!-- Timeline controls row -->
+    <div class="flex items-center justify-between px-1">
+      <div class="flex items-center gap-3">
+        <button
+          @click="setSelectionAtCurrentTime"
+          class="text-xs text-sol-400 hover:text-sol-300 transition-colors"
+        >
+          Set clip here
+        </button>
+        <button
+          @click="centerTimelineOnPlayhead"
+          class="text-xs text-noche-400 hover:text-noche-200 transition-colors"
+        >
+          Center view
+        </button>
+      </div>
+      <span class="text-xs text-noche-500">
+        {{ visibleDuration.toFixed(0) }}s visible
+      </span>
+    </div>
+
+    <!-- Timeline -->
     <div
-      v-if="hasSelection"
-      class="flex items-center justify-between text-sm bg-noche-900/50 rounded-lg p-3"
+      ref="timelineRef"
+      class="relative h-16 rounded-lg bg-noche-800 cursor-crosshair select-none overflow-hidden"
+      @mousedown="onTimelineMouseDown"
+      @touchstart="onTimelineTouchStart"
+      @touchmove="onTimelineTouchMove"
+      @touchend="onTimelineTouchEnd"
+      @wheel="onTimelineWheel"
     >
-      <div class="space-y-1">
-        <div class="text-noche-500 text-xs">Selection</div>
-        <div class="font-mono text-noche-100">
-          {{ formatTime(selectionStart!) }} → {{ formatTime(selectionEnd!) }}
+      <!-- Time markers -->
+      <div
+        v-for="marker in timelineMarkers"
+        :key="marker.time"
+        class="absolute top-0 bottom-0 border-l"
+        :class="marker.isMajor ? 'border-noche-600' : 'border-noche-700'"
+        :style="{
+          left: `${timeToPosition(marker.time, timelineRef?.clientWidth || 300)}px`,
+        }"
+      >
+        <span
+          v-if="marker.isMajor"
+          class="absolute top-1 left-1 text-[10px] text-noche-500 whitespace-nowrap"
+        >
+          {{ marker.label }}
+        </span>
+      </div>
+
+      <!-- Selection region -->
+      <div
+        v-if="hasSelection"
+        class="absolute top-0 bottom-0 bg-sol-500/30 border-l-2 border-r-2 border-sol-500"
+        :style="{
+          left: `${timeToPosition(selectionStart!, timelineRef?.clientWidth || 300)}px`,
+          width: `${timeToPosition(selectionEnd!, timelineRef?.clientWidth || 300) - timeToPosition(selectionStart!, timelineRef?.clientWidth || 300)}px`,
+        }"
+      >
+        <!-- Start Handle -->
+        <div
+          class="absolute left-0 top-0 bottom-0 w-4 -ml-2 bg-sol-500 cursor-ew-resize flex items-center justify-center hover:bg-sol-400 transition-colors"
+        >
+          <div class="w-0.5 h-5 bg-noche-950/50 rounded-full"></div>
+        </div>
+
+        <!-- End Handle -->
+        <div
+          class="absolute right-0 top-0 bottom-0 w-4 -mr-2 bg-sol-500 cursor-ew-resize flex items-center justify-center hover:bg-sol-400 transition-colors"
+        >
+          <div class="w-0.5 h-5 bg-noche-950/50 rounded-full"></div>
+        </div>
+
+        <!-- Selection duration label -->
+        <div
+          class="absolute inset-0 flex items-center justify-center pointer-events-none"
+        >
+          <span
+            class="bg-sol-500 text-noche-950 text-xs font-bold px-2 py-0.5 rounded"
+          >
+            {{ selectionDuration }}s
+          </span>
         </div>
       </div>
-      <div class="text-right space-y-1">
-        <div class="text-noche-500 text-xs">Duration</div>
-        <div class="font-mono text-sol-400 font-bold">
-          {{ selectionDuration }}s
-        </div>
+
+      <!-- Playhead -->
+      <div
+        class="absolute top-0 bottom-0 w-0.5 bg-tierra-400 pointer-events-none z-10"
+        :style="{
+          left: `${timeToPosition(currentTime, timelineRef?.clientWidth || 300)}px`,
+        }"
+      >
+        <div
+          class="absolute -top-0.5 left-1/2 -translate-x-1/2 w-2.5 h-2.5 bg-tierra-400 rounded-full"
+        ></div>
       </div>
     </div>
 
-    <!-- Actions -->
-    <div class="flex gap-3">
-      <button
-        @click="togglePreview"
-        :disabled="!hasSelection"
-        class="btn flex-1"
-        :class="isPreviewMode ? 'btn-danger' : 'btn-secondary'"
+    <!-- Spacer for fixed footer -->
+    <div class="pb-16"></div>
+
+    <!-- Fixed Footer -->
+    <Teleport to="body">
+      <div
+        class="fixed bottom-0 left-0 right-0 bg-noche-950/95 backdrop-blur-sm border-t border-noche-800 px-4 py-3 z-50"
       >
-        <svg
-          v-if="!isPreviewMode"
-          class="w-4 h-4 mr-2 inline"
-          fill="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"
-          />
-        </svg>
-        <svg
-          v-else
-          class="w-4 h-4 mr-2 inline"
-          fill="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <rect x="6" y="4" width="4" height="16" rx="1" />
-          <rect x="14" y="4" width="4" height="16" rx="1" />
-        </svg>
-        {{ isPreviewMode ? "Stop Loop" : "Preview Loop" }}
-      </button>
-      <button
-        @click="confirmSelection"
-        :disabled="!hasSelection"
-        class="btn btn-primary flex-1"
-      >
-        Use This Clip
-      </button>
-    </div>
+        <div class="max-w-2xl mx-auto flex items-center gap-3">
+          <!-- Loop/Preview button -->
+          <button
+            @click="togglePreview"
+            :disabled="!hasSelection"
+            class="flex items-center gap-2 px-4 py-2.5 rounded-xl transition-colors"
+            :class="
+              isPreviewMode
+                ? 'bg-tierra-500 hover:bg-tierra-400 text-white'
+                : 'bg-noche-800 hover:bg-noche-700 text-noche-300 disabled:opacity-40 disabled:cursor-not-allowed'
+            "
+          >
+            <svg
+              v-if="!isPreviewMode"
+              class="w-5 h-5"
+              fill="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"
+              />
+            </svg>
+            <svg v-else class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <rect x="6" y="4" width="4" height="16" rx="1" />
+              <rect x="14" y="4" width="4" height="16" rx="1" />
+            </svg>
+            <span class="text-sm font-medium">{{
+              isPreviewMode ? "Stop" : "Loop"
+            }}</span>
+          </button>
+
+          <!-- Use Clip button -->
+          <button
+            @click="confirmSelection"
+            :disabled="!hasSelection"
+            class="flex-1 btn btn-primary py-2.5 text-base font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Use This Clip
+          </button>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
