@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f59e0b"/>
+      <stop offset="100%" style="stop-color:#d97706"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- Sound waves representing shadowing -->
+  <g fill="none" stroke="#1e2029" stroke-width="32" stroke-linecap="round">
+    <!-- Left wave (original) -->
+    <path d="M140 256 Q140 180, 140 160 M140 256 Q140 332, 140 352"/>
+    <path d="M100 256 Q100 200, 100 190 M100 256 Q100 312, 100 322"/>
+    <path d="M180 256 Q180 140, 180 120 M180 256 Q180 372, 180 392"/>
+    <!-- Right wave (shadow/echo) -->
+    <path d="M332 256 Q332 180, 332 160 M332 256 Q332 332, 332 352" opacity="0.6"/>
+    <path d="M372 256 Q372 200, 372 190 M372 256 Q372 312, 372 322" opacity="0.6"/>
+    <path d="M412 256 Q412 220, 412 210 M412 256 Q412 292, 412 302" opacity="0.6"/>
+  </g>
+  <!-- Arrow showing the shadowing direction -->
+  <path d="M230 256 L282 256 M262 236 L282 256 L262 276" fill="none" stroke="#1e2029" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+

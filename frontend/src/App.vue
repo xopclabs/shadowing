@@ -10,7 +10,7 @@ import { RouterView } from "vue-router";
     >
       <div class="max-w-2xl mx-auto flex items-center justify-between">
         <router-link to="/" class="flex items-center gap-2">
-          <img src="/vite.svg" alt="Logo" class="w-8 h-8" />
+          <img src="/favicon.svg" alt="Logo" class="w-8 h-8" />
           <span class="font-display font-bold text-xl text-sol-400"
             >Shadowing</span
           >
