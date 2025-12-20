@@ -2,10 +2,15 @@
 import { computed, ref, watch, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { useSessionStore } from "@/stores/session";
+import { useSettingsStore } from "@/stores/settings";
 import Spectrogram from "@/components/Spectrogram.vue";
 
 const router = useRouter();
 const sessionStore = useSessionStore();
+const settingsStore = useSettingsStore();
+
+// Settings panel state
+const showSettings = ref(false);
 
 const clipInfo = computed(() => sessionStore.currentClip);
 const recordings = computed(() => sessionStore.recordings);
@@ -43,6 +48,10 @@ const recordingAudioDuration = ref(0);
 
 // Animation frame for smooth seekhead
 let animationFrameId: number | null = null;
+
+// Repetition playback state
+const currentRepetition = ref(0);
+let silenceTimeoutId: number | null = null;
 
 const updateSeekhead = () => {
   if (originalAudioRef.value && isPlayingOriginal.value) {
@@ -93,6 +102,7 @@ const stopSeekheadAnimation = () => {
 
 // Duration tracking for spectrogram scaling
 const originalDuration = ref(0);
+const originalEffectiveDuration = ref(0);
 const recordingDurations = ref<Map<string, number>>(new Map());
 
 const currentRecordingDuration = computed(() => {
@@ -106,14 +116,49 @@ const currentRecordingDuration = computed(() => {
 });
 
 const maxDuration = computed(() => {
-  // Use audio element durations as fallback
-  const origDur = originalDuration.value || originalAudioDuration.value;
+  // Use effective duration (with playback settings) for original, raw duration for recording
+  const origDur =
+    originalEffectiveDuration.value ||
+    originalDuration.value ||
+    originalAudioDuration.value;
   const recDur = currentRecordingDuration.value;
   return Math.max(origDur, recDur) || 1; // Avoid division by zero
 });
 
+// Calculate seekhead position accounting for playback settings
+const originalSeekheadPosition = computed(() => {
+  if (!isPlayingOriginal.value || maxDuration.value <= 0) return 0;
+
+  const speed = settingsStore.speedModifier;
+  const silenceStartSec = settingsStore.silenceAtStart / 1000;
+  const gapSec = settingsStore.silenceBetweenReps / 1000;
+  const baseDuration = originalDuration.value || originalAudioDuration.value;
+
+  if (baseDuration <= 0) return 0;
+
+  // Duration of one playback at current speed
+  const scaledDuration = baseDuration / speed;
+
+  // Current position within the effective timeline
+  // currentRepetition is 1-indexed, originalProgress is 0-1 within current rep
+  const completedReps = Math.max(0, currentRepetition.value - 1);
+  const completedGaps = Math.max(0, completedReps);
+
+  const positionSec =
+    silenceStartSec +
+    completedReps * scaledDuration +
+    completedGaps * gapSec +
+    originalProgress.value * scaledDuration;
+
+  return (positionSec / maxDuration.value) * 100;
+});
+
 const onOriginalDuration = (duration: number) => {
   originalDuration.value = duration;
+};
+
+const onOriginalEffectiveDuration = (duration: number) => {
+  originalEffectiveDuration.value = duration;
 };
 
 const onRecordingDuration = (duration: number) => {
@@ -163,6 +208,16 @@ watch(currentRecording, () => {
   }
 });
 
+// Apply speed changes immediately while playing
+watch(
+  () => settingsStore.speedModifier,
+  (newSpeed) => {
+    if (originalAudioRef.value && isPlayingOriginal.value) {
+      originalAudioRef.value.playbackRate = newSpeed;
+    }
+  },
+);
+
 // Format time helper
 const formatTime = (seconds: number): string => {
   const mins = Math.floor(seconds / 60);
@@ -172,8 +227,7 @@ const formatTime = (seconds: number): string => {
 
 // Recording functions
 const startRecording = async () => {
-  // Stop any playback first
-  if (isPlayingOriginal.value) stopOriginal();
+  // Stop any previous recording playback
   if (isPlayingRecording.value) stopRecordingPlayback();
 
   audioChunks = [];
@@ -214,6 +268,9 @@ const startRecording = async () => {
     mediaRecorder.start(100);
     isRecording.value = true;
 
+    // Start playing original audio with all settings (speed, repetitions, etc.)
+    playOriginal();
+
     timerInterval = window.setInterval(() => {
       recordingTime.value++;
     }, 1000);
@@ -226,6 +283,8 @@ const stopRecording = () => {
   if (mediaRecorder && mediaRecorder.state !== "inactive") {
     mediaRecorder.stop();
   }
+  // Stop the original audio when recording stops
+  if (isPlayingOriginal.value) stopOriginal();
   isRecording.value = false;
 };
 
@@ -251,18 +310,51 @@ const playOriginal = () => {
     stopRecordingPlayback();
   }
 
-  originalAudioRef.value.currentTime = 0;
-  originalAudioRef.value.play();
+  // Clear any existing silence timeout
+  if (silenceTimeoutId) {
+    clearTimeout(silenceTimeoutId);
+    silenceTimeoutId = null;
+  }
+
+  // Reset repetition counter
+  currentRepetition.value = 1;
+
+  // Apply speed modifier
+  originalAudioRef.value.playbackRate = settingsStore.speedModifier;
+
+  // Start with silence at the beginning if configured
+  const silenceMs = settingsStore.silenceAtStart;
+
   isPlayingOriginal.value = true;
   startSeekheadAnimation();
+
+  if (silenceMs > 0) {
+    // Wait for initial silence, then play
+    silenceTimeoutId = window.setTimeout(() => {
+      if (originalAudioRef.value && isPlayingOriginal.value) {
+        originalAudioRef.value.currentTime = 0;
+        originalAudioRef.value.play();
+      }
+    }, silenceMs);
+  } else {
+    originalAudioRef.value.currentTime = 0;
+    originalAudioRef.value.play();
+  }
 };
 
 const stopOriginal = () => {
+  // Clear any pending silence timeout
+  if (silenceTimeoutId) {
+    clearTimeout(silenceTimeoutId);
+    silenceTimeoutId = null;
+  }
+
   if (!originalAudioRef.value) return;
   originalAudioRef.value.pause();
   originalAudioRef.value.currentTime = 0;
   isPlayingOriginal.value = false;
   originalProgress.value = 0;
+  currentRepetition.value = 0;
   if (!isPlayingRecording.value) stopSeekheadAnimation();
 };
 
@@ -291,9 +383,27 @@ const stopRecordingPlayback = () => {
 };
 
 const onOriginalEnded = () => {
-  isPlayingOriginal.value = false;
-  originalProgress.value = 0;
-  if (!isPlayingRecording.value) stopSeekheadAnimation();
+  const totalReps = settingsStore.repetitions;
+
+  // Check if we have more repetitions to play
+  if (currentRepetition.value < totalReps) {
+    currentRepetition.value++;
+    const gapMs = settingsStore.silenceBetweenReps;
+
+    // Schedule next repetition after the gap
+    silenceTimeoutId = window.setTimeout(() => {
+      if (originalAudioRef.value && isPlayingOriginal.value) {
+        originalAudioRef.value.currentTime = 0;
+        originalAudioRef.value.play();
+      }
+    }, gapMs);
+  } else {
+    // All repetitions complete
+    isPlayingOriginal.value = false;
+    originalProgress.value = 0;
+    currentRepetition.value = 0;
+    if (!isPlayingRecording.value) stopSeekheadAnimation();
+  }
 };
 
 const onRecordingEnded = () => {
@@ -389,15 +499,17 @@ if (!clipInfo.value) {
         v-if="clipInfo.audioUrl"
         :audio-url="clipInfo.audioUrl"
         :max-duration="maxDuration || undefined"
+        :show-playback-settings="true"
         class="w-full h-full"
         @duration="onOriginalDuration"
+        @effective-duration="onOriginalEffectiveDuration"
       />
       <!-- Seekhead -->
       <div
         v-if="isPlayingOriginal && maxDuration > 0"
         class="absolute top-0 w-0.5 h-full bg-sol-400 pointer-events-none"
         :style="{
-          left: `${((originalProgress * originalDuration) / maxDuration) * 100}%`,
+          left: `${originalSeekheadPosition}%`,
         }"
       />
       <!-- Label -->
@@ -405,6 +517,18 @@ if (!clipInfo.value) {
         class="absolute top-2 left-2 text-xs text-white/70 bg-black/40 px-2 py-0.5 rounded"
       >
         Original
+        <span
+          v-if="isPlayingOriginal && settingsStore.repetitions > 1"
+          class="ml-1 text-white/90"
+        >
+          {{ currentRepetition }}/{{ settingsStore.repetitions }}
+        </span>
+        <span
+          v-if="isPlayingOriginal && settingsStore.speedModifier !== 1"
+          class="ml-1 text-sol-400"
+        >
+          {{ settingsStore.speedModifier.toFixed(2) }}x
+        </span>
       </div>
       <!-- Play button overlay -->
       <button
@@ -487,6 +611,126 @@ if (!clipInfo.value) {
           <rect x="6" y="6" width="12" height="12" rx="2" />
         </svg>
       </button>
+    </div>
+
+    <!-- Playback Settings (Collapsible) -->
+    <div
+      class="fixed left-0 right-0 bottom-[4.5rem] transition-all duration-300 ease-out z-40 flex flex-col items-center px-2"
+    >
+      <!-- Toggle Button -->
+      <button
+        @click="showSettings = !showSettings"
+        class="flex items-center gap-1.5 px-3 py-1.5 rounded-t-lg bg-noche-800/90 backdrop-blur-sm border border-b-0 border-noche-700 text-noche-400 hover:text-noche-200 text-xs transition-colors"
+      >
+        <svg
+          class="w-3.5 h-3.5 transition-transform duration-300"
+          :class="showSettings ? 'rotate-180' : ''"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M5 15l7-7 7 7"
+          />
+        </svg>
+        <span>Settings</span>
+      </button>
+
+      <!-- Settings Panel -->
+      <div
+        class="w-full max-w-2xl lg:max-w-5xl overflow-hidden transition-all duration-300 ease-out"
+        :class="showSettings ? 'max-h-80' : 'max-h-0'"
+      >
+        <div
+          class="bg-noche-800/95 backdrop-blur-sm border border-noche-700 rounded-xl p-4 space-y-4"
+        >
+          <!-- Speed Modifier -->
+          <div class="space-y-2">
+            <div class="flex items-center justify-between text-sm">
+              <label class="text-noche-300">Speed</label>
+              <span class="font-mono text-sol-400"
+                >{{ settingsStore.speedModifier.toFixed(2) }}x</span
+              >
+            </div>
+            <div class="relative">
+              <input
+                type="range"
+                v-model.number="settingsStore.speedModifier"
+                min="0.5"
+                max="1.5"
+                step="0.05"
+                class="w-full h-1.5 bg-noche-700 rounded-full appearance-none cursor-pointer accent-sol-500"
+              />
+              <div class="relative h-4 text-[10px] text-noche-500 mt-1">
+                <span class="absolute left-0">0.5</span>
+                <span class="absolute left-[25%] -translate-x-1/2">0.75</span>
+                <span class="absolute left-[40%] -translate-x-1/2">0.9</span>
+                <span class="absolute left-[50%] -translate-x-1/2">1</span>
+                <span class="absolute left-[60%] -translate-x-1/2">1.1</span>
+                <span class="absolute left-[75%] -translate-x-1/2">1.25</span>
+                <span class="absolute right-0">1.5</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Silence at Start -->
+          <div class="space-y-2">
+            <div class="flex items-center justify-between text-sm">
+              <label class="text-noche-300">Silence at start</label>
+              <span class="font-mono text-sol-400"
+                >{{ (settingsStore.silenceAtStart / 1000).toFixed(1) }}s</span
+              >
+            </div>
+            <input
+              type="range"
+              v-model.number="settingsStore.silenceAtStart"
+              min="0"
+              max="2000"
+              step="100"
+              class="w-full h-1.5 bg-noche-700 rounded-full appearance-none cursor-pointer accent-sol-500"
+            />
+          </div>
+
+          <!-- Number of Repetitions -->
+          <div class="space-y-2">
+            <div class="flex items-center justify-between text-sm">
+              <label class="text-noche-300">Repetitions</label>
+              <span class="font-mono text-sol-400">{{
+                settingsStore.repetitions
+              }}</span>
+            </div>
+            <input
+              type="range"
+              v-model.number="settingsStore.repetitions"
+              min="1"
+              max="10"
+              step="1"
+              class="w-full h-1.5 bg-noche-700 rounded-full appearance-none cursor-pointer accent-sol-500"
+            />
+          </div>
+
+          <!-- Silence Between Repetitions -->
+          <div class="space-y-2">
+            <div class="flex items-center justify-between text-sm">
+              <label class="text-noche-300">Gap between reps</label>
+              <span class="font-mono text-sol-400"
+                >{{ settingsStore.silenceBetweenReps }}ms</span
+              >
+            </div>
+            <input
+              type="range"
+              v-model.number="settingsStore.silenceBetweenReps"
+              min="0"
+              max="1000"
+              step="100"
+              class="w-full h-1.5 bg-noche-700 rounded-full appearance-none cursor-pointer accent-sol-500"
+            />
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Footer -->

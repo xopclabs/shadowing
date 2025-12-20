@@ -87,7 +87,7 @@ define(["./workbox-ca84f546"], function (workbox) {
       },
       {
         url: "index.html",
-        revision: "0.usn54fdu3ng",
+        revision: "0.ta7ve46v03g",
       },
     ],
     {},

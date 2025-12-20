@@ -7,18 +7,30 @@ const STORAGE_KEY = "shadowing_settings";
 
 interface StoredSettings {
   displayMode: DisplayMode;
+  speedModifier: number;
+  silenceAtStart: number;
+  repetitions: number;
+  silenceBetweenReps: number;
 }
+
+const DEFAULT_SETTINGS: StoredSettings = {
+  displayMode: "spectrogram",
+  speedModifier: 1,
+  silenceAtStart: 500,
+  repetitions: 5,
+  silenceBetweenReps: 600,
+};
 
 function loadSettings(): StoredSettings {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
-      return JSON.parse(stored);
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(stored) };
     }
   } catch (e) {
     console.warn("Failed to load settings from localStorage:", e);
   }
-  return { displayMode: "spectrogram" };
+  return { ...DEFAULT_SETTINGS };
 }
 
 function saveSettings(settings: StoredSettings): void {
@@ -34,11 +46,27 @@ export const useSettingsStore = defineStore("settings", () => {
 
   // State
   const displayMode = ref<DisplayMode>(stored.displayMode);
+  const speedModifier = ref<number>(stored.speedModifier);
+  const silenceAtStart = ref<number>(stored.silenceAtStart);
+  const repetitions = ref<number>(stored.repetitions);
+  const silenceBetweenReps = ref<number>(stored.silenceBetweenReps);
 
   // Persist changes
-  watch(displayMode, (newMode) => {
-    saveSettings({ displayMode: newMode });
-  });
+  const persistSettings = () => {
+    saveSettings({
+      displayMode: displayMode.value,
+      speedModifier: speedModifier.value,
+      silenceAtStart: silenceAtStart.value,
+      repetitions: repetitions.value,
+      silenceBetweenReps: silenceBetweenReps.value,
+    });
+  };
+
+  watch(displayMode, persistSettings);
+  watch(speedModifier, persistSettings);
+  watch(silenceAtStart, persistSettings);
+  watch(repetitions, persistSettings);
+  watch(silenceBetweenReps, persistSettings);
 
   // Actions
   const setDisplayMode = (mode: DisplayMode) => {
@@ -52,6 +80,10 @@ export const useSettingsStore = defineStore("settings", () => {
 
   return {
     displayMode,
+    speedModifier,
+    silenceAtStart,
+    repetitions,
+    silenceBetweenReps,
     setDisplayMode,
     toggleDisplayMode,
   };

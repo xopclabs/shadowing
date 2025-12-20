@@ -5,14 +5,37 @@ import { useSettingsStore } from "@/stores/settings";
 const props = defineProps<{
   audioUrl: string;
   maxDuration?: number; // If provided, scale visualization to this duration
+  // Playback settings for visual representation
+  showPlaybackSettings?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "duration", duration: number): void;
+  (e: "effectiveDuration", duration: number): void;
 }>();
 
 const settingsStore = useSettingsStore();
 const displayMode = computed(() => settingsStore.displayMode);
+
+// Computed effective duration based on playback settings
+const effectiveDuration = computed(() => {
+  if (!props.showPlaybackSettings) return null;
+
+  const baseDuration = audioDuration.value;
+  if (baseDuration <= 0) return null;
+
+  const speed = settingsStore.speedModifier;
+  const silenceStart = settingsStore.silenceAtStart / 1000; // ms to s
+  const reps = settingsStore.repetitions;
+  const gapMs = settingsStore.silenceBetweenReps / 1000; // ms to s
+
+  // Duration of one playback at the given speed
+  const onePlayDuration = baseDuration / speed;
+  // Total silence between reps (reps - 1 gaps)
+  const totalGaps = (reps - 1) * gapMs;
+
+  return silenceStart + onePlayDuration * reps + totalGaps;
+});
 
 // Canvas refs
 const canvasRef = ref<HTMLCanvasElement | null>(null);
@@ -286,14 +309,31 @@ const generateWaveform = async () => {
 
     const maxWidth = 800;
     const maxHeight = 200;
-
-    // Calculate width based on maxDuration if provided
-    const durationRatio = props.maxDuration
-      ? audioBuffer.duration / props.maxDuration
-      : 1;
-    const displayWidth = maxWidth;
-    const waveformWidth = Math.floor(maxWidth * durationRatio);
     const displayHeight = maxHeight;
+
+    // Playback settings
+    const useSettings = props.showPlaybackSettings;
+    const speed = useSettings ? settingsStore.speedModifier : 1;
+    const silenceStartSec = useSettings
+      ? settingsStore.silenceAtStart / 1000
+      : 0;
+    const reps = useSettings ? settingsStore.repetitions : 1;
+    const gapSec = useSettings ? settingsStore.silenceBetweenReps / 1000 : 0;
+
+    // Calculate durations
+    const baseDuration = audioBuffer.duration;
+    const scaledDuration = baseDuration / speed;
+    const totalEffectiveDuration =
+      silenceStartSec + scaledDuration * reps + (reps - 1) * gapSec;
+
+    if (useSettings) {
+      emit("effectiveDuration", totalEffectiveDuration);
+    }
+
+    // Determine canvas width based on maxDuration or effective duration
+    const referenceDuration = props.maxDuration || totalEffectiveDuration;
+    const pixelsPerSecond = maxWidth / referenceDuration;
+    const displayWidth = maxWidth;
 
     canvas.width = displayWidth;
     canvas.height = displayHeight;
@@ -302,14 +342,16 @@ const generateWaveform = async () => {
     ctx.fillStyle = `rgb(${WAVEFORM_BG[0]}, ${WAVEFORM_BG[1]}, ${WAVEFORM_BG[2]})`;
     ctx.fillRect(0, 0, displayWidth, displayHeight);
 
-    // Calculate samples per pixel
-    const samplesPerPixel = Math.floor(channelData.length / waveformWidth);
-    const centerY = displayHeight / 2;
+    // Pre-calculate waveform peaks for the base audio
+    const baseWaveformWidth = Math.floor(
+      baseDuration * pixelsPerSecond * (1 / speed) * speed,
+    ); // Original width before scaling
+    const samplesPerPixel = Math.floor(
+      channelData.length / Math.max(1, baseWaveformWidth),
+    );
+    const peaks: { min: number; max: number }[] = [];
 
-    // Draw waveform
-    ctx.fillStyle = `rgb(${WAVEFORM_COLOR[0]}, ${WAVEFORM_COLOR[1]}, ${WAVEFORM_COLOR[2]})`;
-
-    for (let x = 0; x < waveformWidth; x++) {
+    for (let x = 0; x < baseWaveformWidth; x++) {
       const startSample = x * samplesPerPixel;
       const endSample = Math.min(
         startSample + samplesPerPixel,
@@ -325,12 +367,51 @@ const generateWaveform = async () => {
         if (sample > max) max = sample;
       }
 
-      // Scale to canvas height (leave some padding)
-      const amplitude = Math.max(Math.abs(min), Math.abs(max));
-      const barHeight = amplitude * (displayHeight * 0.85);
+      peaks.push({ min, max });
+    }
 
-      // Draw centered bar
-      ctx.fillRect(x, centerY - barHeight / 2, 1, Math.max(1, barHeight));
+    // Draw waveform with playback settings
+    ctx.fillStyle = `rgb(${WAVEFORM_COLOR[0]}, ${WAVEFORM_COLOR[1]}, ${WAVEFORM_COLOR[2]})`;
+    const centerY = displayHeight / 2;
+
+    const scaledWidthPixels = Math.floor(scaledDuration * pixelsPerSecond);
+    const silenceStartPixels = Math.floor(silenceStartSec * pixelsPerSecond);
+    const gapPixels = Math.floor(gapSec * pixelsPerSecond);
+
+    let currentX = silenceStartPixels;
+
+    for (let rep = 0; rep < reps; rep++) {
+      // Draw one repetition of the waveform (scaled by speed)
+      for (let x = 0; x < scaledWidthPixels; x++) {
+        const canvasX = currentX + x;
+        if (canvasX >= displayWidth) break;
+
+        // Map x position to original peaks index
+        const progress = x / scaledWidthPixels;
+        const peakIndex = Math.min(
+          Math.floor(progress * peaks.length),
+          peaks.length - 1,
+        );
+        const peak = peaks[peakIndex];
+
+        if (peak) {
+          const amplitude = Math.max(Math.abs(peak.min), Math.abs(peak.max));
+          const barHeight = amplitude * (displayHeight * 0.85);
+          ctx.fillRect(
+            canvasX,
+            centerY - barHeight / 2,
+            1,
+            Math.max(1, barHeight),
+          );
+        }
+      }
+
+      currentX += scaledWidthPixels;
+
+      // Add gap after each rep except the last
+      if (rep < reps - 1) {
+        currentX += gapPixels;
+      }
     }
   } catch (e) {
     console.error("Waveform generation failed:", e);
@@ -390,24 +471,43 @@ const generateSpectrogram = async () => {
 
     const maxWidth = 800;
     const maxHeight = 200;
-
-    // Calculate width based on maxDuration if provided
-    const durationRatio = props.maxDuration
-      ? audioBuffer.duration / props.maxDuration
-      : 1;
-    const baseWidth = Math.min(numFrames, maxWidth);
-    const displayWidth = baseWidth; // Full canvas width
-    const spectrogramWidth = Math.floor(baseWidth * durationRatio); // Actual spectrogram portion
     const displayHeight = Math.min(numBins, maxHeight);
+
+    // Playback settings
+    const useSettings = props.showPlaybackSettings;
+    const speed = useSettings ? settingsStore.speedModifier : 1;
+    const silenceStartSec = useSettings
+      ? settingsStore.silenceAtStart / 1000
+      : 0;
+    const reps = useSettings ? settingsStore.repetitions : 1;
+    const gapSec = useSettings ? settingsStore.silenceBetweenReps / 1000 : 0;
+
+    // Calculate durations
+    const baseDuration = audioBuffer.duration;
+    const scaledDuration = baseDuration / speed;
+    const totalEffectiveDuration =
+      silenceStartSec + scaledDuration * reps + (reps - 1) * gapSec;
+
+    if (useSettings) {
+      emit("effectiveDuration", totalEffectiveDuration);
+    }
+
+    // Determine canvas width based on maxDuration or effective duration
+    const referenceDuration = props.maxDuration || totalEffectiveDuration;
+    const pixelsPerSecond = maxWidth / referenceDuration;
+    const displayWidth = maxWidth;
 
     canvas.width = displayWidth;
     canvas.height = displayHeight;
 
+    // Generate base spectrogram magnitudes
     const windowFunc = hannWindow(FFT_SIZE);
     const magnitudes: number[][] = [];
     let maxMagnitude = 0;
 
-    const frameStep = Math.max(1, Math.floor(numFrames / spectrogramWidth));
+    // Generate at a fixed resolution, we'll resample when drawing
+    const baseSpectrogramCols = Math.min(numFrames, maxWidth);
+    const frameStep = Math.max(1, Math.floor(numFrames / baseSpectrogramCols));
 
     for (let frame = 0; frame < numFrames; frame += frameStep) {
       const startSample = frame * HOP_SIZE;
@@ -452,10 +552,11 @@ const generateSpectrogram = async () => {
       imageData.data[i + 3] = 255;
     }
 
-    // Draw spectrogram data (only up to spectrogramWidth)
-    const actualCols = Math.min(magnitudes.length, spectrogramWidth);
-    for (let col = 0; col < actualCols; col++) {
-      const frameMags = magnitudes[col];
+    // Helper to draw a column from magnitude data
+    const drawColumn = (col: number, magIndex: number) => {
+      if (col < 0 || col >= displayWidth) return;
+      const frameMags = magnitudes[Math.min(magIndex, magnitudes.length - 1)];
+      if (!frameMags) return;
 
       for (let row = 0; row < displayHeight; row++) {
         const binIdx = Math.floor(
@@ -472,6 +573,30 @@ const generateSpectrogram = async () => {
         imageData.data[pixelIndex + 1] = g;
         imageData.data[pixelIndex + 2] = b;
         imageData.data[pixelIndex + 3] = 255;
+      }
+    };
+
+    // Draw spectrogram with playback settings
+    const scaledWidthPixels = Math.floor(scaledDuration * pixelsPerSecond);
+    const silenceStartPixels = Math.floor(silenceStartSec * pixelsPerSecond);
+    const gapPixels = Math.floor(gapSec * pixelsPerSecond);
+
+    let currentX = silenceStartPixels;
+
+    for (let rep = 0; rep < reps; rep++) {
+      // Draw one repetition of the spectrogram (scaled by speed)
+      for (let x = 0; x < scaledWidthPixels; x++) {
+        // Map x position to original magnitude index
+        const progress = x / scaledWidthPixels;
+        const magIndex = Math.floor(progress * magnitudes.length);
+        drawColumn(currentX + x, magIndex);
+      }
+
+      currentX += scaledWidthPixels;
+
+      // Add gap after each rep except the last
+      if (rep < reps - 1) {
+        currentX += gapPixels;
       }
     }
 
@@ -536,6 +661,21 @@ watch(displayMode, () => {
     generateVisualization();
   }
 });
+
+// Re-render when playback settings change (if showing them)
+watch(
+  [
+    () => settingsStore.speedModifier,
+    () => settingsStore.silenceAtStart,
+    () => settingsStore.repetitions,
+    () => settingsStore.silenceBetweenReps,
+  ],
+  () => {
+    if (props.audioUrl && props.showPlaybackSettings) {
+      generateVisualization();
+    }
+  },
+);
 </script>
 
 <template>
