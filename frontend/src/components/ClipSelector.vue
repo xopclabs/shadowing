@@ -814,12 +814,12 @@ onUnmounted(() => {
     </div>
 
     <!-- Spacer for fixed footer -->
-    <div class="pb-16"></div>
+    <div class="pb-20"></div>
 
     <!-- Fixed Footer -->
     <Teleport to="body">
       <div
-        class="fixed bottom-0 left-0 right-0 bg-noche-950/95 backdrop-blur-sm border-t border-noche-800 px-4 py-3 z-50"
+        class="fixed bottom-0 left-0 right-0 bg-noche-950/95 backdrop-blur-sm border-t border-noche-800 px-4 py-4 z-50"
       >
         <div class="max-w-2xl mx-auto flex items-center gap-3">
           <!-- Loop/Preview button -->

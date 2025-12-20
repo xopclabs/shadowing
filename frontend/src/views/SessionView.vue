@@ -362,8 +362,8 @@ if (!clipInfo.value) {
 <template>
   <div
     v-if="clipInfo"
-    class="grid grid-rows-2 gap-2 h-[calc(100dvh-4rem)] overflow-hidden px-2 max-w-2xl lg:max-w-5xl mx-auto"
-    style="padding-bottom: 4.5rem"
+    class="grid grid-rows-2 gap-3 px-2 max-w-2xl lg:max-w-5xl mx-auto overflow-hidden"
+    style="height: calc(100dvh - 11.5rem)"
   >
     <!-- Hidden audio elements -->
     <audio
@@ -489,11 +489,13 @@ if (!clipInfo.value) {
       </button>
     </div>
 
-    <!-- Compact Footer -->
+    <!-- Footer -->
     <div
-      class="fixed bottom-0 left-0 right-0 bg-noche-950/95 backdrop-blur-sm border-t border-noche-800 safe-bottom"
+      class="fixed bottom-0 left-0 right-0 bg-noche-950/95 backdrop-blur-sm border-t border-noche-800 safe-bottom z-50"
     >
-      <div class="max-w-2xl lg:max-w-5xl mx-auto flex items-center gap-2 p-2">
+      <div
+        class="max-w-2xl lg:max-w-5xl mx-auto flex items-center gap-2 px-3 py-4"
+      >
         <button
           @click="goBack"
           class="w-16 h-10 rounded-lg flex items-center justify-center bg-noche-800 hover:bg-noche-700 text-noche-300 text-sm"
