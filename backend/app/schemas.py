@@ -51,41 +51,15 @@ class ClipExtractRequest(BaseModel):
     end_time: float = Field(..., gt=0, description='End time in seconds')
 
 
-# Session schemas
-class SessionBase(BaseModel):
-    notes: Optional[str] = None
-
-
-class SessionCreate(SessionBase):
-    pass
-
-
-class SessionResponse(SessionBase):
-    id: int
-    started_at: datetime
-    ended_at: Optional[datetime] = None
-    duration_minutes: Optional[float] = None
-    recording_count: int = 0
-
-    class Config:
-        from_attributes = True
-
-
-class SessionEnd(BaseModel):
-    notes: Optional[str] = None
-
-
 # Recording schemas
 class RecordingBase(BaseModel):
     clip_id: Optional[int] = None
-    session_id: Optional[int] = None
 
 
 class RecordingResponse(BaseModel):
     id: int
     filename: str
     clip_id: Optional[int] = None
-    session_id: Optional[int] = None
     attempt_number: int
     created_at: datetime
 
@@ -97,19 +71,46 @@ class RecordingListResponse(BaseModel):
     recordings: List[RecordingResponse]
 
 
+# Recent files schemas
+class RecentFileResponse(BaseModel):
+    id: int
+    video_path: str
+    filename: str
+    last_timestamp: float
+    last_used: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RecentFileCreate(BaseModel):
+    video_path: str
+    last_timestamp: float = 0
+
+
+class RecentFileListResponse(BaseModel):
+    recent_files: List[RecentFileResponse]
+
+
 # Statistics schemas
-class DailyStats(BaseModel):
-    date: str
-    recording_count: int
-    session_count: int
-    total_duration_minutes: float
-
-
 class OverallStats(BaseModel):
     total_recordings: int
-    total_sessions: int
-    total_clips: int
+    total_clips_practiced: int  # Clips that have at least 1 recording
     total_practice_minutes: float
     recordings_this_week: int
-    average_recordings_per_session: float
+    first_recording_date: Optional[datetime] = None
+    last_recording_date: Optional[datetime] = None
 
+
+# Storage info schemas
+class StorageInfo(BaseModel):
+    clips_count: int
+    clips_size_bytes: int
+    recordings_count: int
+    recordings_size_bytes: int
+    total_size_bytes: int
+
+
+class DeleteFilesRequest(BaseModel):
+    delete_clips: bool = False
+    delete_recordings: bool = False

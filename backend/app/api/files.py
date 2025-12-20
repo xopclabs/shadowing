@@ -1,9 +1,10 @@
+import asyncio
 import os
 from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 
@@ -176,4 +177,76 @@ async def get_file_info(
         'extension': file_path.suffix.lower() if file_path.is_file() else None,
         'modified': stat.st_mtime,
     }
+
+
+@router.get('/files/thumbnail')
+async def get_video_thumbnail(
+    path: str = Query(..., description='Video file path'),
+    timestamp: float = Query(0, description='Timestamp in seconds to capture'),
+    width: int = Query(320, description='Thumbnail width'),
+):
+    """
+    Generate a thumbnail from a video at a specific timestamp.
+    Returns a JPEG image.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info(f'Thumbnail request: path={path}, timestamp={timestamp}')
+    
+    file_path = Path(path).resolve()
+    
+    if not is_path_allowed(str(file_path)):
+        logger.warning(f'Thumbnail access denied: {file_path}')
+        raise HTTPException(status_code=403, detail='Access denied')
+    
+    if not file_path.exists():
+        logger.warning(f'Thumbnail file not found: {file_path}')
+        raise HTTPException(status_code=404, detail='File not found')
+    
+    if not is_video_file(file_path):
+        logger.warning(f'Thumbnail not a video: {file_path}')
+        raise HTTPException(status_code=400, detail='Not a video file')
+    
+    # Use FFmpeg to extract a frame
+    cmd = [
+        'ffmpeg',
+        '-ss', str(timestamp),
+        '-i', str(file_path),
+        '-vframes', '1',
+        '-vf', f'scale={width}:-1',
+        '-f', 'image2',
+        '-c:v', 'mjpeg',
+        '-q:v', '3',
+        '-v', 'error',
+        'pipe:1',
+    ]
+    
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode != 0 or not stdout:
+            error_msg = stderr.decode() if stderr else 'Unknown error'
+            logger.error(f'Thumbnail FFmpeg failed: {error_msg}')
+            raise HTTPException(status_code=500, detail=f'Failed to generate thumbnail: {error_msg}')
+        
+        logger.info(f'Thumbnail generated: {len(stdout)} bytes')
+        
+        return Response(
+            content=stdout,
+            media_type='image/jpeg',
+            headers={
+                'Cache-Control': 'public, max-age=86400',  # Cache for 1 day
+            },
+        )
+        
+    except FileNotFoundError:
+        logger.error('FFmpeg not found')
+        raise HTTPException(status_code=500, detail='FFmpeg not found')
 

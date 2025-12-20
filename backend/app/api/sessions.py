@@ -1,205 +1,286 @@
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timedelta
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_session
-from app.models import Session, Recording
-from app.schemas import SessionCreate, SessionResponse, SessionEnd
+from app.models import Recording, Clip, Video, RecentFile
+from app.schemas import (
+    OverallStats,
+    RecentFileResponse,
+    RecentFileCreate,
+    RecentFileListResponse,
+    StorageInfo,
+    DeleteFilesRequest,
+)
 
 
 router = APIRouter()
 
 
-@router.post('/sessions', response_model=SessionResponse)
-async def create_session(
-    session_data: Optional[SessionCreate] = None,
-    db: AsyncSession = Depends(get_session),
-):
-    """Start a new practice session."""
-    session = Session(
-        notes=session_data.notes if session_data else None,
-    )
-    db.add(session)
-    await db.flush()
-    await db.refresh(session)
-    
-    return SessionResponse(
-        id=session.id,
-        started_at=session.started_at,
-        ended_at=session.ended_at,
-        notes=session.notes,
-        recording_count=0,
-    )
+# ============ STATS ============
 
-
-@router.get('/sessions')
-async def list_sessions(
-    limit: int = 50,
-    db: AsyncSession = Depends(get_session),
-):
-    """List all practice sessions with recording counts."""
-    # Query sessions with recording counts
-    query = (
-        select(Session, func.count(Recording.id).label('recording_count'))
-        .outerjoin(Recording, Recording.session_id == Session.id)
-        .group_by(Session.id)
-        .order_by(Session.started_at.desc())
-        .limit(limit)
-    )
-    
-    result = await db.execute(query)
-    rows = result.all()
-    
-    sessions = []
-    for session, recording_count in rows:
-        sessions.append(SessionResponse(
-            id=session.id,
-            started_at=session.started_at,
-            ended_at=session.ended_at,
-            notes=session.notes,
-            duration_minutes=session.duration_minutes,
-            recording_count=recording_count,
-        ))
-    
-    return {'sessions': sessions}
-
-
-@router.get('/sessions/{session_id}', response_model=SessionResponse)
-async def get_session_detail(
-    session_id: int,
-    db: AsyncSession = Depends(get_session),
-):
-    """Get session details by ID."""
-    result = await db.execute(
-        select(Session).where(Session.id == session_id)
-    )
-    session = result.scalar_one_or_none()
-    
-    if not session:
-        raise HTTPException(status_code=404, detail='Session not found')
-    
-    # Get recording count
-    count_result = await db.execute(
-        select(func.count(Recording.id)).where(Recording.session_id == session_id)
-    )
-    recording_count = count_result.scalar() or 0
-    
-    return SessionResponse(
-        id=session.id,
-        started_at=session.started_at,
-        ended_at=session.ended_at,
-        notes=session.notes,
-        duration_minutes=session.duration_minutes,
-        recording_count=recording_count,
-    )
-
-
-@router.patch('/sessions/{session_id}/end', response_model=SessionResponse)
-async def end_session(
-    session_id: int,
-    end_data: Optional[SessionEnd] = None,
-    db: AsyncSession = Depends(get_session),
-):
-    """End a practice session."""
-    result = await db.execute(
-        select(Session).where(Session.id == session_id)
-    )
-    session = result.scalar_one_or_none()
-    
-    if not session:
-        raise HTTPException(status_code=404, detail='Session not found')
-    
-    if session.ended_at:
-        raise HTTPException(status_code=400, detail='Session already ended')
-    
-    session.ended_at = datetime.utcnow()
-    if end_data and end_data.notes:
-        session.notes = end_data.notes
-    
-    await db.flush()
-    
-    # Get recording count
-    count_result = await db.execute(
-        select(func.count(Recording.id)).where(Recording.session_id == session_id)
-    )
-    recording_count = count_result.scalar() or 0
-    
-    return SessionResponse(
-        id=session.id,
-        started_at=session.started_at,
-        ended_at=session.ended_at,
-        notes=session.notes,
-        duration_minutes=session.duration_minutes,
-        recording_count=recording_count,
-    )
-
-
-@router.delete('/sessions/{session_id}')
-async def delete_session(
-    session_id: int,
-    db: AsyncSession = Depends(get_session),
-):
-    """Delete a session (recordings are cascade deleted)."""
-    result = await db.execute(
-        select(Session).where(Session.id == session_id)
-    )
-    session = result.scalar_one_or_none()
-    
-    if not session:
-        raise HTTPException(status_code=404, detail='Session not found')
-    
-    await db.delete(session)
-    
-    return {'message': 'Session deleted', 'id': session_id}
-
-
-@router.get('/stats')
+@router.get('/stats', response_model=OverallStats)
 async def get_stats(
     db: AsyncSession = Depends(get_session),
 ):
     """Get overall practice statistics."""
-    from app.models import Clip
-    
     # Total recordings
     recordings_result = await db.execute(select(func.count(Recording.id)))
     total_recordings = recordings_result.scalar() or 0
-    
-    # Total sessions
-    sessions_result = await db.execute(select(func.count(Session.id)))
-    total_sessions = sessions_result.scalar() or 0
-    
-    # Total clips
-    clips_result = await db.execute(select(func.count(Clip.id)))
-    total_clips = clips_result.scalar() or 0
-    
-    # Total practice time (from ended sessions)
-    sessions_query = select(Session).where(Session.ended_at.isnot(None))
-    sessions_result = await db.execute(sessions_query)
-    sessions = sessions_result.scalars().all()
-    
-    total_minutes = sum(
-        (s.duration_minutes or 0) for s in sessions
+
+    # Clips practiced (clips that have at least 1 recording)
+    clips_practiced_result = await db.execute(
+        select(func.count(func.distinct(Recording.clip_id)))
+        .where(Recording.clip_id.isnot(None))
     )
+    total_clips_practiced = clips_practiced_result.scalar() or 0
+
+    # Calculate total practice time from clip durations * recordings
+    # Get all clips that have recordings and sum their durations
+    clips_with_recordings = await db.execute(
+        select(Clip)
+        .join(Recording, Recording.clip_id == Clip.id)
+        .distinct()
+    )
+    clips = clips_with_recordings.scalars().all()
     
+    # Get recording counts per clip
+    recording_counts = {}
+    for clip in clips:
+        count_result = await db.execute(
+            select(func.count(Recording.id)).where(Recording.clip_id == clip.id)
+        )
+        recording_counts[clip.id] = count_result.scalar() or 0
+    
+    # Total practice minutes = sum of (clip duration * number of recordings for that clip)
+    total_practice_minutes = sum(
+        clip.duration * recording_counts.get(clip.id, 0) / 60
+        for clip in clips
+    )
+
     # Recordings this week
-    from datetime import timedelta
     week_ago = datetime.utcnow() - timedelta(days=7)
     week_result = await db.execute(
         select(func.count(Recording.id)).where(Recording.created_at >= week_ago)
     )
     recordings_this_week = week_result.scalar() or 0
-    
-    # Average recordings per session
-    avg_recordings = total_recordings / total_sessions if total_sessions > 0 else 0
-    
+
+    # First and last recording dates
+    first_result = await db.execute(
+        select(Recording.created_at).order_by(Recording.created_at.asc()).limit(1)
+    )
+    first_recording_date = first_result.scalar()
+
+    last_result = await db.execute(
+        select(Recording.created_at).order_by(Recording.created_at.desc()).limit(1)
+    )
+    last_recording_date = last_result.scalar()
+
+    return OverallStats(
+        total_recordings=total_recordings,
+        total_clips_practiced=total_clips_practiced,
+        total_practice_minutes=round(total_practice_minutes, 1),
+        recordings_this_week=recordings_this_week,
+        first_recording_date=first_recording_date,
+        last_recording_date=last_recording_date,
+    )
+
+
+# ============ RECENT FILES ============
+
+@router.get('/recent-files', response_model=RecentFileListResponse)
+async def list_recent_files(
+    limit: int = 10,
+    db: AsyncSession = Depends(get_session),
+):
+    """List recently practiced video files."""
+    result = await db.execute(
+        select(RecentFile)
+        .join(Video, Video.id == RecentFile.video_id)
+        .order_by(RecentFile.last_used.desc())
+        .limit(limit)
+    )
+    recent = result.scalars().all()
+
+    files = []
+    for rf in recent:
+        # Get the video to extract path and filename
+        video_result = await db.execute(
+            select(Video).where(Video.id == rf.video_id)
+        )
+        video = video_result.scalar_one_or_none()
+        if video:
+            filename = Path(video.path).name
+            files.append(RecentFileResponse(
+                id=rf.id,
+                video_path=video.path,
+                filename=filename,
+                last_timestamp=rf.last_timestamp,
+                last_used=rf.last_used,
+            ))
+
+    return RecentFileListResponse(recent_files=files)
+
+
+@router.post('/recent-files', response_model=RecentFileResponse)
+async def add_recent_file(
+    data: RecentFileCreate,
+    db: AsyncSession = Depends(get_session),
+):
+    """Add or update a recent file entry."""
+    # Get or create the video record
+    video_result = await db.execute(
+        select(Video).where(Video.path == data.video_path)
+    )
+    video = video_result.scalar_one_or_none()
+
+    if not video:
+        # Create video record
+        video = Video(
+            path=data.video_path,
+            title=Path(data.video_path).stem,
+        )
+        db.add(video)
+        await db.flush()
+        await db.refresh(video)
+
+    # Check if recent file entry exists
+    recent_result = await db.execute(
+        select(RecentFile).where(RecentFile.video_id == video.id)
+    )
+    recent = recent_result.scalar_one_or_none()
+
+    if recent:
+        # Update existing
+        recent.last_timestamp = data.last_timestamp
+        recent.last_used = datetime.utcnow()
+    else:
+        # Create new
+        recent = RecentFile(
+            video_id=video.id,
+            last_timestamp=data.last_timestamp,
+            last_used=datetime.utcnow(),
+        )
+        db.add(recent)
+
+    await db.flush()
+    await db.refresh(recent)
+
+    return RecentFileResponse(
+        id=recent.id,
+        video_path=video.path,
+        filename=Path(video.path).name,
+        last_timestamp=recent.last_timestamp,
+        last_used=recent.last_used,
+    )
+
+
+@router.delete('/recent-files/{file_id}')
+async def delete_recent_file(
+    file_id: int,
+    db: AsyncSession = Depends(get_session),
+):
+    """Delete a recent file entry."""
+    result = await db.execute(
+        select(RecentFile).where(RecentFile.id == file_id)
+    )
+    recent = result.scalar_one_or_none()
+
+    if not recent:
+        raise HTTPException(status_code=404, detail='Recent file not found')
+
+    await db.delete(recent)
+
+    return {'message': 'Recent file removed', 'id': file_id}
+
+
+# ============ STORAGE MANAGEMENT ============
+
+def get_directory_size(path: Path) -> tuple[int, int]:
+    """Get total size and file count in a directory."""
+    total_size = 0
+    file_count = 0
+    if path.exists():
+        for f in path.iterdir():
+            if f.is_file():
+                total_size += f.stat().st_size
+                file_count += 1
+    return file_count, total_size
+
+
+@router.get('/storage', response_model=StorageInfo)
+async def get_storage_info():
+    """Get storage usage information for clips and recordings."""
+    clips_count, clips_size = get_directory_size(settings.clips_dir)
+    recordings_count, recordings_size = get_directory_size(settings.recordings_dir)
+
+    return StorageInfo(
+        clips_count=clips_count,
+        clips_size_bytes=clips_size,
+        recordings_count=recordings_count,
+        recordings_size_bytes=recordings_size,
+        total_size_bytes=clips_size + recordings_size,
+    )
+
+
+@router.post('/storage/delete-files')
+async def delete_local_files(
+    request: DeleteFilesRequest,
+    db: AsyncSession = Depends(get_session),
+):
+    """Delete local audio files (clips and/or recordings)."""
+    deleted_clips = 0
+    deleted_recordings = 0
+    freed_bytes = 0
+
+    if request.delete_clips:
+        # Delete all clip audio files
+        if settings.clips_dir.exists():
+            for f in settings.clips_dir.iterdir():
+                if f.is_file():
+                    freed_bytes += f.stat().st_size
+                    f.unlink()
+                    deleted_clips += 1
+
+        # Clear clips from database (this will cascade delete recordings)
+        await db.execute(delete(Clip))
+
+    if request.delete_recordings:
+        # Delete all recording audio files
+        if settings.recordings_dir.exists():
+            for f in settings.recordings_dir.iterdir():
+                if f.is_file():
+                    freed_bytes += f.stat().st_size
+                    f.unlink()
+                    deleted_recordings += 1
+
+        # Clear recordings from database
+        await db.execute(delete(Recording))
+
+    await db.commit()
+
     return {
-        'total_recordings': total_recordings,
-        'total_sessions': total_sessions,
-        'total_clips': total_clips,
-        'total_practice_minutes': round(total_minutes, 1),
-        'recordings_this_week': recordings_this_week,
-        'average_recordings_per_session': round(avg_recordings, 1),
+        'deleted_clips': deleted_clips,
+        'deleted_recordings': deleted_recordings,
+        'freed_bytes': freed_bytes,
     }
+
+
+@router.post('/database/clear')
+async def clear_database(
+    db: AsyncSession = Depends(get_session),
+):
+    """Clear all data from the database."""
+    # Delete in order to respect foreign keys
+    await db.execute(delete(Recording))
+    await db.execute(delete(RecentFile))
+    await db.execute(delete(Clip))
+    await db.execute(delete(Video))
+
+    await db.commit()
+
+    return {'message': 'Database cleared successfully'}

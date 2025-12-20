@@ -23,6 +23,9 @@ class Video(Base):
     clips: Mapped[List['Clip']] = relationship(
         'Clip', back_populates='video', cascade='all, delete-orphan'
     )
+    recent_files: Mapped[List['RecentFile']] = relationship(
+        'RecentFile', back_populates='video', cascade='all, delete-orphan'
+    )
 
 
 class Clip(Base):
@@ -52,32 +55,6 @@ class Clip(Base):
         return self.end_time - self.start_time
 
 
-class Session(Base):
-    """Represents a practice session."""
-    __tablename__ = 'sessions'
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    started_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow
-    )
-    ended_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime, nullable=True
-    )
-    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    # Relationships
-    recordings: Mapped[List['Recording']] = relationship(
-        'Recording', back_populates='session', cascade='all, delete-orphan'
-    )
-
-    @property
-    def duration_minutes(self) -> Optional[float]:
-        if self.ended_at:
-            delta = self.ended_at - self.started_at
-            return delta.total_seconds() / 60
-        return None
-
-
 class Recording(Base):
     """Represents a user's audio recording attempt."""
     __tablename__ = 'recordings'
@@ -85,9 +62,6 @@ class Recording(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     clip_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey('clips.id'), nullable=True, index=True
-    )
-    session_id: Mapped[Optional[int]] = mapped_column(
-        Integer, ForeignKey('sessions.id'), nullable=True, index=True
     )
     audio_path: Mapped[str] = mapped_column(String(1024))
     filename: Mapped[str] = mapped_column(String(256))
@@ -100,7 +74,20 @@ class Recording(Base):
     clip: Mapped[Optional['Clip']] = relationship(
         'Clip', back_populates='recordings'
     )
-    session: Mapped[Optional['Session']] = relationship(
-        'Session', back_populates='recordings'
+
+
+class RecentFile(Base):
+    """Tracks recently practiced video files for quick access."""
+    __tablename__ = 'recent_files'
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    video_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey('videos.id'), index=True
+    )
+    last_timestamp: Mapped[float] = mapped_column(Float, default=0)
+    last_used: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow
     )
 
+    # Relationships
+    video: Mapped['Video'] = relationship('Video', back_populates='recent_files')

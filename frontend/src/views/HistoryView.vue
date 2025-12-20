@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
-import { api } from "@/api/client";
+import { ref, onMounted } from "vue";
+import { api, type Stats } from "@/api/client";
 import AudioPlayer from "@/components/AudioPlayer.vue";
 
 interface Recording {
@@ -8,17 +8,7 @@ interface Recording {
   filename: string;
   created_at: string;
   clip_id?: number;
-  session_id?: number;
   attempt_number: number;
-}
-
-interface Stats {
-  total_recordings: number;
-  total_sessions: number;
-  total_clips: number;
-  total_practice_minutes: number;
-  recordings_this_week: number;
-  average_recordings_per_session: number;
 }
 
 // State
@@ -35,7 +25,7 @@ const loadData = async () => {
 
     const [recordingsData, statsData] = await Promise.all([
       api.listRecordings(),
-      fetch("/api/stats").then((r) => r.json()),
+      api.getStats(),
     ]);
 
     recordings.value = recordingsData.recordings;
@@ -87,6 +77,20 @@ const formatDuration = (minutes: number): string => {
   const hours = Math.floor(minutes / 60);
   const mins = Math.round(minutes % 60);
   return `${hours}h ${mins}m`;
+};
+
+const formatFullDate = (dateStr?: string): string => {
+  if (!dateStr) return "—";
+  try {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  } catch {
+    return dateStr;
+  }
 };
 
 onMounted(loadData);
@@ -254,42 +258,42 @@ onMounted(loadData);
           <div class="text-sm text-noche-400 mt-1">This Week</div>
         </div>
 
-        <!-- Total Sessions -->
+        <!-- Clips Practiced -->
         <div class="card text-center">
           <div class="text-3xl font-display font-bold text-noche-200">
-            {{ stats.total_sessions }}
-          </div>
-          <div class="text-sm text-noche-400 mt-1">Sessions</div>
-        </div>
-
-        <!-- Total Clips -->
-        <div class="card text-center">
-          <div class="text-3xl font-display font-bold text-noche-200">
-            {{ stats.total_clips }}
+            {{ stats.total_clips_practiced }}
           </div>
           <div class="text-sm text-noche-400 mt-1">Clips Practiced</div>
         </div>
+
+        <!-- Practice Time -->
+        <div class="card text-center">
+          <div class="text-3xl font-display font-bold text-noche-200">
+            {{ formatDuration(stats.total_practice_minutes) }}
+          </div>
+          <div class="text-sm text-noche-400 mt-1">Practice Time</div>
+        </div>
       </div>
 
-      <!-- Additional Stats -->
+      <!-- Practice Period -->
       <div class="card space-y-4">
-        <h3 class="font-semibold text-noche-200">Practice Summary</h3>
+        <h3 class="font-semibold text-noche-200">Practice Period</h3>
 
         <div
           class="flex items-center justify-between py-2 border-b border-noche-800"
         >
-          <span class="text-noche-400">Total Practice Time</span>
+          <span class="text-noche-400">First Recording</span>
           <span class="text-noche-100 font-semibold">
-            {{ formatDuration(stats.total_practice_minutes) }}
+            {{ formatFullDate(stats.first_recording_date) }}
           </span>
         </div>
 
         <div
           class="flex items-center justify-between py-2 border-b border-noche-800"
         >
-          <span class="text-noche-400">Avg Recordings per Session</span>
+          <span class="text-noche-400">Last Recording</span>
           <span class="text-noche-100 font-semibold">
-            {{ stats.average_recordings_per_session }}
+            {{ formatFullDate(stats.last_recording_date) }}
           </span>
         </div>
 

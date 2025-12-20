@@ -20,7 +20,6 @@ router = APIRouter()
 async def upload_recording(
     audio: UploadFile = File(...),
     clip_id: Optional[int] = Form(None),
-    session_id: Optional[int] = Form(None),
     db: AsyncSession = Depends(get_session),
 ):
     """
@@ -71,7 +70,6 @@ async def upload_recording(
         audio_path=str(filepath),
         filename=filename,
         clip_id=clip_id,
-        session_id=session_id,
         attempt_number=attempt_number,
     )
     db.add(recording)
@@ -82,7 +80,6 @@ async def upload_recording(
         id=recording.id,
         filename=recording.filename,
         clip_id=recording.clip_id,
-        session_id=recording.session_id,
         attempt_number=recording.attempt_number,
         created_at=recording.created_at,
     )
@@ -91,17 +88,14 @@ async def upload_recording(
 @router.get('/recordings', response_model=RecordingListResponse)
 async def list_recordings(
     clip_id: Optional[int] = None,
-    session_id: Optional[int] = None,
     limit: int = 100,
     db: AsyncSession = Depends(get_session),
 ):
-    """List recordings, optionally filtered by clip or session."""
+    """List recordings, optionally filtered by clip."""
     query = select(Recording).order_by(Recording.created_at.desc()).limit(limit)
     
     if clip_id is not None:
         query = query.where(Recording.clip_id == clip_id)
-    if session_id is not None:
-        query = query.where(Recording.session_id == session_id)
     
     result = await db.execute(query)
     recordings = result.scalars().all()
@@ -112,7 +106,6 @@ async def list_recordings(
                 id=r.id,
                 filename=r.filename,
                 clip_id=r.clip_id,
-                session_id=r.session_id,
                 attempt_number=r.attempt_number,
                 created_at=r.created_at,
             )
