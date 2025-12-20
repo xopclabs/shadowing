@@ -53,7 +53,53 @@ let animationFrameId: number | null = null;
 const currentRepetition = ref(0);
 let silenceTimeoutId: number | null = null;
 
+// Phase-based seekhead tracking for original audio
+type PlaybackPhase = "idle" | "initial_silence" | "playing" | "gap";
+const playbackPhase = ref<PlaybackPhase>("idle");
+let phaseStartTime: number | null = null;
+
+// Calculate current seekhead position in seconds
+const getCurrentSeekheadSeconds = (): number => {
+  if (playbackPhase.value === "idle") return 0;
+
+  const speed = settingsStore.speedModifier;
+  const silenceStartSec = settingsStore.silenceAtStart / 1000;
+  const gapSec = settingsStore.silenceBetweenReps / 1000;
+  const baseDuration = originalDuration.value || originalAudioDuration.value;
+  const scaledDuration = baseDuration / speed;
+
+  // Completed reps (currentRepetition is 1-indexed during playback)
+  // Note: currentRepetition is incremented BEFORE entering gap phase
+  const completedReps = Math.max(0, currentRepetition.value - 1);
+  // During gap phase, we haven't completed the current gap yet
+  const completedGaps =
+    playbackPhase.value === "gap"
+      ? Math.max(0, completedReps - 1)
+      : completedReps;
+
+  // Base position from completed work
+  let position =
+    silenceStartSec + completedReps * scaledDuration + completedGaps * gapSec;
+
+  if (playbackPhase.value === "initial_silence" && phaseStartTime !== null) {
+    // During initial silence, add elapsed time in this phase
+    const elapsedInPhase = (performance.now() - phaseStartTime) / 1000;
+    position = Math.min(elapsedInPhase, silenceStartSec);
+  } else if (playbackPhase.value === "playing" && originalAudioRef.value) {
+    // During playback, use actual audio currentTime (scaled by speed)
+    const audioTime = originalAudioRef.value.currentTime;
+    position += audioTime / speed;
+  } else if (playbackPhase.value === "gap" && phaseStartTime !== null) {
+    // During gap, add elapsed time in this phase
+    const elapsedInPhase = (performance.now() - phaseStartTime) / 1000;
+    position += Math.min(elapsedInPhase, gapSec);
+  }
+
+  return position;
+};
+
 const updateSeekhead = () => {
+  // Update originalProgress for other uses
   if (originalAudioRef.value && isPlayingOriginal.value) {
     const duration = originalAudioRef.value.duration;
     if (duration && !isNaN(duration) && isFinite(duration)) {
@@ -125,32 +171,22 @@ const maxDuration = computed(() => {
   return Math.max(origDur, recDur) || 1; // Avoid division by zero
 });
 
-// Calculate seekhead position accounting for playback settings
+// Calculate seekhead position based on current phase and audio position
 const originalSeekheadPosition = computed(() => {
   if (!isPlayingOriginal.value || maxDuration.value <= 0) return 0;
 
-  const speed = settingsStore.speedModifier;
-  const silenceStartSec = settingsStore.silenceAtStart / 1000;
-  const gapSec = settingsStore.silenceBetweenReps / 1000;
-  const baseDuration = originalDuration.value || originalAudioDuration.value;
+  const effectiveDur = originalEffectiveDuration.value || maxDuration.value;
+  if (effectiveDur <= 0) return 0;
 
-  if (baseDuration <= 0) return 0;
+  // Trigger reactivity on phase changes and audio progress
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _phase = playbackPhase.value;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _progress = originalProgress.value;
 
-  // Duration of one playback at current speed
-  const scaledDuration = baseDuration / speed;
-
-  // Current position within the effective timeline
-  // currentRepetition is 1-indexed, originalProgress is 0-1 within current rep
-  const completedReps = Math.max(0, currentRepetition.value - 1);
-  const completedGaps = Math.max(0, completedReps);
-
-  const positionSec =
-    silenceStartSec +
-    completedReps * scaledDuration +
-    completedGaps * gapSec +
-    originalProgress.value * scaledDuration;
-
-  return (positionSec / maxDuration.value) * 100;
+  const positionSec = getCurrentSeekheadSeconds();
+  const position = (positionSec / effectiveDur) * 100;
+  return Math.min(position, 100);
 });
 
 const onOriginalDuration = (duration: number) => {
@@ -329,14 +365,23 @@ const playOriginal = () => {
   startSeekheadAnimation();
 
   if (silenceMs > 0) {
+    // Start in initial silence phase
+    playbackPhase.value = "initial_silence";
+    phaseStartTime = performance.now();
+
     // Wait for initial silence, then play
     silenceTimeoutId = window.setTimeout(() => {
       if (originalAudioRef.value && isPlayingOriginal.value) {
+        playbackPhase.value = "playing";
+        phaseStartTime = null;
         originalAudioRef.value.currentTime = 0;
         originalAudioRef.value.play();
       }
     }, silenceMs);
   } else {
+    // No initial silence, start playing immediately
+    playbackPhase.value = "playing";
+    phaseStartTime = null;
     originalAudioRef.value.currentTime = 0;
     originalAudioRef.value.play();
   }
@@ -348,6 +393,10 @@ const stopOriginal = () => {
     clearTimeout(silenceTimeoutId);
     silenceTimeoutId = null;
   }
+
+  // Reset phase tracking
+  playbackPhase.value = "idle";
+  phaseStartTime = null;
 
   if (!originalAudioRef.value) return;
   originalAudioRef.value.pause();
@@ -390,15 +439,23 @@ const onOriginalEnded = () => {
     currentRepetition.value++;
     const gapMs = settingsStore.silenceBetweenReps;
 
+    // Enter gap phase
+    playbackPhase.value = "gap";
+    phaseStartTime = performance.now();
+
     // Schedule next repetition after the gap
     silenceTimeoutId = window.setTimeout(() => {
       if (originalAudioRef.value && isPlayingOriginal.value) {
+        playbackPhase.value = "playing";
+        phaseStartTime = null;
         originalAudioRef.value.currentTime = 0;
         originalAudioRef.value.play();
       }
     }, gapMs);
   } else {
-    // All repetitions complete
+    // All repetitions complete - reset phase tracking
+    playbackPhase.value = "idle";
+    phaseStartTime = null;
     isPlayingOriginal.value = false;
     originalProgress.value = 0;
     currentRepetition.value = 0;
