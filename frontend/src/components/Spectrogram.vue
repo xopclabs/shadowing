@@ -114,6 +114,142 @@ const BG_COLOR: [number, number, number] = [10, 0, 30];
 const WAVEFORM_BG: [number, number, number] = [10, 0, 30];
 const WAVEFORM_COLOR: [number, number, number] = [255, 180, 100]; // sol-400 ish
 
+/**
+ * Determine API endpoint for backend spectrogram based on audio URL
+ */
+const getSpectrogramApiUrl = (
+  audioUrl: string,
+  maxDuration?: number,
+): string => {
+  // Parse the audio URL to determine if it's a clip or recording
+  // Clip URLs: /api/clips/{id}/audio
+  // Recording URLs: /api/recordings/{filename}
+  const url = new URL(audioUrl, window.location.origin);
+  const pathParts = url.pathname.split("/").filter(Boolean);
+
+  let apiUrl: string;
+
+  if (pathParts.includes("clips") && pathParts.includes("audio")) {
+    // Format: /api/clips/{id}/audio - use clip ID endpoint
+    const clipIdIdx = pathParts.indexOf("clips") + 1;
+    const clipId = pathParts[clipIdIdx];
+    apiUrl = `/api/spectrogram/clip/id/${clipId}`;
+  } else if (pathParts.includes("recordings")) {
+    // Format: /api/recordings/{filename}
+    const filename = pathParts[pathParts.length - 1];
+    apiUrl = `/api/spectrogram/recording/${filename}`;
+  } else {
+    // Fallback: try to extract filename from URL
+    const filename = pathParts[pathParts.length - 1];
+    // Guess based on extension or default to clip
+    if (
+      filename.includes("_") &&
+      (filename.endsWith(".webm") || filename.endsWith(".ogg"))
+    ) {
+      apiUrl = `/api/spectrogram/recording/${filename}`;
+    } else {
+      apiUrl = `/api/spectrogram/clip/${filename}`;
+    }
+  }
+
+  if (maxDuration) {
+    apiUrl += `?max_duration=${maxDuration}`;
+  }
+
+  return apiUrl;
+};
+
+const generateBackendSpectrogram = async () => {
+  await nextTick();
+
+  if (!canvasRef.value) {
+    console.error("Backend spectrogram: Canvas ref is null");
+    return;
+  }
+
+  isAnalyzing.value = true;
+  error.value = null;
+
+  const canvas = canvasRef.value;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  try {
+    const apiUrl = getSpectrogramApiUrl(props.audioUrl, props.maxDuration);
+    console.log(
+      "[Spectrogram] Backend fetch:",
+      apiUrl,
+      "| source:",
+      props.audioUrl,
+    );
+
+    const response = await fetch(apiUrl);
+    console.log("[Spectrogram] Response status:", response.status);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(
+        "[Spectrogram] Error response:",
+        response.status,
+        errorText,
+      );
+      throw new Error(`${response.status}: ${errorText}`);
+    }
+
+    // Get duration from response header (may not be accessible due to CORS)
+    const durationHeader = response.headers.get("X-Audio-Duration");
+    console.log("[Spectrogram] Duration header:", durationHeader);
+    if (durationHeader) {
+      audioDuration.value = parseFloat(durationHeader);
+      emit("duration", audioDuration.value);
+    }
+
+    // Load the PNG image
+    const blob = await response.blob();
+    console.log("[Spectrogram] Received blob:", blob.size, "bytes");
+
+    if (blob.size === 0) {
+      throw new Error("Received empty image");
+    }
+
+    const imageUrl = URL.createObjectURL(blob);
+
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => {
+        console.log("[Spectrogram] Image loaded:", img.width, "x", img.height);
+        resolve();
+      };
+      img.onerror = (e) => {
+        console.error("[Spectrogram] Image load error:", e);
+        reject(new Error("Failed to load spectrogram image"));
+      };
+      img.src = imageUrl;
+    });
+
+    // Set canvas size to match image
+    canvas.width = img.width;
+    canvas.height = img.height;
+
+    // Draw the image
+    ctx.drawImage(img, 0, 0);
+
+    // Clean up
+    URL.revokeObjectURL(imageUrl);
+    console.log("[Spectrogram] Successfully rendered");
+  } catch (e) {
+    console.error("[Spectrogram] Failed:", e);
+    error.value = `Failed: ${e instanceof Error ? e.message : String(e)}`;
+
+    canvas.width = 300;
+    canvas.height = 100;
+    ctx.fillStyle = "#394053";
+    ctx.fillRect(0, 0, 300, 100);
+  } finally {
+    isAnalyzing.value = false;
+  }
+};
+
 const generateWaveform = async () => {
   await nextTick();
 
@@ -362,6 +498,8 @@ const generateVisualization = () => {
 
   if (displayMode.value === "waveform") {
     generateWaveform();
+  } else if (displayMode.value === "backend") {
+    generateBackendSpectrogram();
   } else {
     generateSpectrogram();
   }

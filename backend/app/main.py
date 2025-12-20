@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import init_db
-from app.api import clips, files, recordings, sessions
+from app.api import clips, files, recordings, sessions, spectrogram
 
 
 @asynccontextmanager
@@ -32,6 +32,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
+    expose_headers=['X-Audio-Duration'],
 )
 
 # Include routers
@@ -39,6 +40,7 @@ app.include_router(recordings.router, prefix=settings.api_prefix, tags=['recordi
 app.include_router(clips.router, prefix=settings.api_prefix, tags=['clips'])
 app.include_router(sessions.router, prefix=settings.api_prefix, tags=['sessions'])
 app.include_router(files.router, prefix=settings.api_prefix, tags=['files'])
+app.include_router(spectrogram.router, prefix=settings.api_prefix, tags=['spectrogram'])
 
 
 @app.get('/')

@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
 
-export type DisplayMode = "spectrogram" | "waveform";
+export type DisplayMode = "spectrogram" | "waveform" | "backend";
 
 const STORAGE_KEY = "shadowing_settings";
 

@@ -10,13 +10,20 @@ const displayModeOptions: {
 }[] = [
   {
     value: "spectrogram",
-    label: "Spectrogram",
-    description: "Detailed frequency visualization (slower on mobile)",
+    label: "Spectrogram (local)",
+    description:
+      "Detailed frequency visualization computed on device (slower on mobile)",
+  },
+  {
+    value: "backend",
+    label: "Spectrogram (server)",
+    description:
+      "Detailed frequency visualization computed on server (recommended for mobile)",
   },
   {
     value: "waveform",
     label: "Waveform",
-    description: "Simple amplitude visualization (faster)",
+    description: "Simple amplitude visualization (fastest)",
   },
 ];
 </script>
