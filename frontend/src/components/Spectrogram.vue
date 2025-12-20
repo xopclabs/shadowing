@@ -3,7 +3,11 @@ import { ref, watch, onMounted, nextTick } from "vue";
 
 const props = defineProps<{
   audioUrl: string;
-  label?: string;
+  maxDuration?: number; // If provided, scale spectrogram to this duration
+}>();
+
+const emit = defineEmits<{
+  (e: "duration", duration: number): void;
 }>();
 
 // Canvas refs
@@ -12,17 +16,17 @@ const canvasRef = ref<HTMLCanvasElement | null>(null);
 // State
 const isAnalyzing = ref(false);
 const error = ref<string | null>(null);
+const audioDuration = ref(0);
 
 // Configuration
 const FFT_SIZE = 1024;
-const HOP_SIZE = 256; // Overlap for smoother spectrogram
+const HOP_SIZE = 256;
 
 // Simple FFT implementation (Cooley-Tukey radix-2)
 function fft(real: Float32Array, imag: Float32Array): void {
   const n = real.length;
   if (n <= 1) return;
 
-  // Bit-reverse permutation
   for (let i = 0, j = 0; i < n; i++) {
     if (j > i) {
       [real[i], real[j]] = [real[j], real[i]];
@@ -36,7 +40,6 @@ function fft(real: Float32Array, imag: Float32Array): void {
     j += m;
   }
 
-  // Cooley-Tukey FFT
   for (let len = 2; len <= n; len <<= 1) {
     const halfLen = len >> 1;
     const angleStep = (-2 * Math.PI) / len;
@@ -58,18 +61,15 @@ function fft(real: Float32Array, imag: Float32Array): void {
   }
 }
 
-// Hann window function for smoother FFT
 function hannWindow(size: number): Float32Array {
-  const window = new Float32Array(size);
+  const win = new Float32Array(size);
   for (let i = 0; i < size; i++) {
-    window[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (size - 1)));
+    win[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (size - 1)));
   }
-  return window;
+  return win;
 }
 
-// Color map for spectrogram (magma-like colormap)
 const getColorForValue = (value: number): [number, number, number] => {
-  // value is 0-1, apply gamma for better visualization
   const v = Math.pow(value, 0.7);
 
   if (v < 0.25) {
@@ -103,13 +103,14 @@ const getColorForValue = (value: number): [number, number, number] => {
   }
 };
 
-// Generate spectrogram from audio URL
+// Background color for padding (matches spectrogram's darkest color at v=0)
+const BG_COLOR: [number, number, number] = [10, 0, 30];
+
 const generateSpectrogram = async () => {
-  // Wait for next tick to ensure canvas is rendered
   await nextTick();
 
   if (!canvasRef.value) {
-    console.error("Spectrogram: Canvas ref is null after nextTick");
+    console.error("Spectrogram: Canvas ref is null");
     return;
   }
 
@@ -123,68 +124,50 @@ const generateSpectrogram = async () => {
   let audioContext: AudioContext | null = null;
 
   try {
-    console.log("Spectrogram: Fetching audio from:", props.audioUrl);
-    // Fetch audio file
     const response = await fetch(props.audioUrl);
     if (!response.ok) {
-      console.error(
-        "Spectrogram: Failed to fetch audio, status:",
-        response.status,
-      );
       throw new Error(`Failed to load audio: ${response.status}`);
     }
 
-    console.log(
-      "Spectrogram: Got response, content-type:",
-      response.headers.get("content-type"),
-    );
     const arrayBuffer = await response.arrayBuffer();
-    console.log("Spectrogram: ArrayBuffer size:", arrayBuffer.byteLength);
 
-    // Create audio context and decode
     audioContext = new (window.AudioContext ||
       (window as any).webkitAudioContext)();
-    console.log("Spectrogram: Created AudioContext, decoding...");
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-    console.log("Spectrogram: Decoded audio buffer:", {
-      duration: audioBuffer.duration,
-      sampleRate: audioBuffer.sampleRate,
-      numberOfChannels: audioBuffer.numberOfChannels,
-      length: audioBuffer.length,
-    });
 
-    // Get mono audio data
+    audioDuration.value = audioBuffer.duration;
+    emit("duration", audioBuffer.duration);
+
     const channelData = audioBuffer.getChannelData(0);
     const sampleRate = audioBuffer.sampleRate;
 
-    // Calculate spectrogram dimensions
     const numFrames =
       Math.floor((channelData.length - FFT_SIZE) / HOP_SIZE) + 1;
-    const numBins = FFT_SIZE / 2; // Only positive frequencies
+    const numBins = FFT_SIZE / 2;
 
-    // Limit canvas size for performance
     const maxWidth = 800;
     const maxHeight = 200;
-    const displayWidth = Math.min(numFrames, maxWidth);
+
+    // Calculate width based on maxDuration if provided
+    const durationRatio = props.maxDuration
+      ? audioBuffer.duration / props.maxDuration
+      : 1;
+    const baseWidth = Math.min(numFrames, maxWidth);
+    const displayWidth = baseWidth; // Full canvas width
+    const spectrogramWidth = Math.floor(baseWidth * durationRatio); // Actual spectrogram portion
     const displayHeight = Math.min(numBins, maxHeight);
 
     canvas.width = displayWidth;
     canvas.height = displayHeight;
 
-    // Precompute window function
     const windowFunc = hannWindow(FFT_SIZE);
-
-    // Store all magnitude data
     const magnitudes: number[][] = [];
     let maxMagnitude = 0;
 
-    // Process each frame
-    const frameStep = Math.max(1, Math.floor(numFrames / displayWidth));
+    const frameStep = Math.max(1, Math.floor(numFrames / spectrogramWidth));
 
     for (let frame = 0; frame < numFrames; frame += frameStep) {
       const startSample = frame * HOP_SIZE;
-
-      // Prepare FFT input (apply window)
       const real = new Float32Array(FFT_SIZE);
       const imag = new Float32Array(FFT_SIZE);
 
@@ -198,18 +181,15 @@ const generateSpectrogram = async () => {
         imag[i] = 0;
       }
 
-      // Compute FFT
       fft(real, imag);
 
-      // Compute magnitude spectrum (only lower half for display - speech frequencies)
       const frameMags: number[] = [];
-      const useBins = Math.min(numBins, displayHeight * 2); // Focus on lower frequencies
+      const useBins = Math.min(numBins, displayHeight * 2);
 
       for (let bin = 0; bin < useBins; bin++) {
         const magnitude = Math.sqrt(
           real[bin] * real[bin] + imag[bin] * imag[bin],
         );
-        // Convert to dB scale
         const db = 20 * Math.log10(magnitude + 1e-10);
         frameMags.push(db);
         if (db > maxMagnitude) maxMagnitude = db;
@@ -218,26 +198,31 @@ const generateSpectrogram = async () => {
       magnitudes.push(frameMags);
     }
 
-    // Normalize and draw
-    const minDb = maxMagnitude - 80; // 80 dB dynamic range
+    const minDb = maxMagnitude - 80;
     const imageData = ctx.createImageData(displayWidth, displayHeight);
 
-    for (let col = 0; col < magnitudes.length && col < displayWidth; col++) {
+    // Fill entire canvas with background first
+    for (let i = 0; i < imageData.data.length; i += 4) {
+      imageData.data[i] = BG_COLOR[0];
+      imageData.data[i + 1] = BG_COLOR[1];
+      imageData.data[i + 2] = BG_COLOR[2];
+      imageData.data[i + 3] = 255;
+    }
+
+    // Draw spectrogram data (only up to spectrogramWidth)
+    const actualCols = Math.min(magnitudes.length, spectrogramWidth);
+    for (let col = 0; col < actualCols; col++) {
       const frameMags = magnitudes[col];
 
       for (let row = 0; row < displayHeight; row++) {
-        // Map row to frequency bin (invert so low freq at bottom)
         const binIdx = Math.floor(
           (displayHeight - 1 - row) * (frameMags.length / displayHeight),
         );
         const db = frameMags[binIdx] || minDb;
-
-        // Normalize to 0-1
         const normalized = Math.max(
           0,
           Math.min(1, (db - minDb) / (maxMagnitude - minDb)),
         );
-
         const [r, g, b] = getColorForValue(normalized);
         const pixelIndex = (row * displayWidth + col) * 4;
         imageData.data[pixelIndex] = r;
@@ -250,23 +235,12 @@ const generateSpectrogram = async () => {
     ctx.putImageData(imageData, 0, 0);
   } catch (e) {
     console.error("Spectrogram generation failed:", e);
-    console.error("Error details:", {
-      name: e instanceof Error ? e.name : "Unknown",
-      message: e instanceof Error ? e.message : String(e),
-      stack: e instanceof Error ? e.stack : undefined,
-    });
-    error.value = `Failed to generate spectrogram: ${e instanceof Error ? e.message : String(e)}`;
+    error.value = `Failed: ${e instanceof Error ? e.message : String(e)}`;
 
-    // Draw placeholder
     canvas.width = 300;
     canvas.height = 100;
     ctx.fillStyle = "#394053";
     ctx.fillRect(0, 0, 300, 100);
-    ctx.fillStyle = "#657392";
-    ctx.font = "14px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("Spectrogram unavailable", 150, 50);
   } finally {
     isAnalyzing.value = false;
 
@@ -276,20 +250,26 @@ const generateSpectrogram = async () => {
   }
 };
 
-// Generate on mount
 onMounted(() => {
-  console.log("Spectrogram: Component mounted, audioUrl:", props.audioUrl);
   if (props.audioUrl) {
     generateSpectrogram();
   }
 });
 
-// Watch for URL changes after mount
 watch(
   () => props.audioUrl,
   (newUrl) => {
-    console.log("Spectrogram: URL changed to:", newUrl);
     if (newUrl) {
+      generateSpectrogram();
+    }
+  },
+);
+
+// Re-render if maxDuration changes
+watch(
+  () => props.maxDuration,
+  () => {
+    if (props.audioUrl) {
       generateSpectrogram();
     }
   },
@@ -297,43 +277,28 @@ watch(
 </script>
 
 <template>
-  <div class="space-y-2">
-    <div v-if="label" class="text-sm text-noche-400">{{ label }}</div>
-
-    <!-- Loading State -->
+  <div class="relative w-full h-full">
     <div
       v-if="isAnalyzing"
-      class="flex items-center justify-center h-24 bg-noche-800 rounded-lg"
+      class="absolute inset-0 flex items-center justify-center bg-noche-800 rounded-lg"
     >
-      <div class="flex items-center gap-2 text-noche-400">
-        <div
-          class="w-4 h-4 border-2 border-sol-500 border-t-transparent rounded-full animate-spin"
-        ></div>
-        <span class="text-sm">Analyzing...</span>
-      </div>
+      <div
+        class="w-5 h-5 border-2 border-sol-500 border-t-transparent rounded-full animate-spin"
+      ></div>
     </div>
 
-    <!-- Spectrogram Canvas -->
     <canvas
       v-show="!isAnalyzing"
       ref="canvasRef"
-      class="w-full h-32 rounded-lg bg-noche-800 object-cover"
+      class="w-full h-full rounded-lg bg-noche-800"
       style="image-rendering: pixelated"
     />
 
-    <!-- Error State -->
-    <div v-if="error" class="text-xs text-tierra-400 text-center">
-      {{ error }}
-    </div>
-
-    <!-- Frequency Labels -->
     <div
-      v-if="!isAnalyzing && !error"
-      class="flex justify-between text-xs text-noche-500 px-1"
+      v-if="error && !isAnalyzing"
+      class="absolute inset-0 flex items-center justify-center bg-noche-800 rounded-lg"
     >
-      <span>0 Hz</span>
-      <span>Time →</span>
-      <span>~4 kHz</span>
+      <span class="text-xs text-noche-500">Spectrogram unavailable</span>
     </div>
   </div>
 </template>
