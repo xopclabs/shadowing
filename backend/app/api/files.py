@@ -146,16 +146,16 @@ async def stream_file(
     
     # If it's a browser-native format, serve directly
     if ext in BROWSER_NATIVE_FORMATS or not transcode:
-    ext_to_media = {
-        '.mp4': 'video/mp4',
-        '.mkv': 'video/x-matroska',
-        '.avi': 'video/x-msvideo',
-        '.webm': 'video/webm',
-        '.mov': 'video/quicktime',
-        '.m4v': 'video/mp4',
-        '.wmv': 'video/x-ms-wmv',
-        '.flv': 'video/x-flv',
-    }
+        ext_to_media = {
+            '.mp4': 'video/mp4',
+            '.mkv': 'video/x-matroska',
+            '.avi': 'video/x-msvideo',
+            '.webm': 'video/webm',
+            '.mov': 'video/quicktime',
+            '.m4v': 'video/mp4',
+            '.wmv': 'video/x-ms-wmv',
+            '.flv': 'video/x-flv',
+        }
         media_type = ext_to_media.get(ext, 'video/mp4')
     
     return FileResponse(
