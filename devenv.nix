@@ -51,10 +51,4 @@
     backend.exec = "cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port $BACKEND_PORT";
     frontend.exec = "cd frontend && npm install && npm run dev -- --host 0.0.0.0 --port $FRONTEND_PORT";
   };
-
-  # Pre-commit hooks (optional but nice)
-  pre-commit.hooks = {
-    ruff.enable = true;
-    prettier.enable = true;
-  };
 }

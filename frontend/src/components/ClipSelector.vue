@@ -38,6 +38,18 @@ const dragType = ref<"start" | "end" | "region" | "seekbar" | null>(null);
 const dragStartX = ref(0);
 const dragStartTime = ref(0);
 
+// Video info for transcoded videos
+const videoInfo = ref<{
+  duration: number | null;
+  needs_transcode: boolean;
+} | null>(null);
+
+// Whether video info has been loaded (controls when video src is set)
+const videoInfoLoaded = ref(false);
+
+// Stream offset for transcoded video seeking
+const streamStartOffset = ref(0);
+
 // Timeline zoom state - store visible duration directly
 const visibleSeconds = ref(DEFAULT_VISIBLE_DURATION);
 const timelineOffset = ref(0); // Start time visible in timeline
@@ -74,6 +86,13 @@ const formatTime = (seconds: number): string => {
   return `${mins}:${secs.toString().padStart(2, "0")}.${ms}`;
 };
 
+// Safe percentage calculation to avoid NaN/Infinity when duration is 0 or invalid
+const safePercent = (value: number, total: number): number => {
+  if (!total || !isFinite(total) || total <= 0) return 0;
+  if (!isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, (value / total) * 100));
+};
+
 const formatTimeShort = (seconds: number): string => {
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
@@ -82,11 +101,13 @@ const formatTimeShort = (seconds: number): string => {
 
 // Timeline position helpers (relative to visible area)
 const timeToPosition = (time: number, containerWidth: number): number => {
+  if (!visibleDuration.value || !isFinite(visibleDuration.value)) return 0;
   const relativeTime = time - timelineOffset.value;
   return (relativeTime / visibleDuration.value) * containerWidth;
 };
 
 const positionToTime = (x: number, containerWidth: number): number => {
+  if (!containerWidth) return 0;
   const relativeTime = (x / containerWidth) * visibleDuration.value;
   return Math.max(
     0,
@@ -99,27 +120,46 @@ const timeToSeekbarPosition = (
   time: number,
   containerWidth: number,
 ): number => {
+  if (!duration.value || !isFinite(duration.value)) return 0;
   return (time / duration.value) * containerWidth;
 };
 
 const seekbarPositionToTime = (x: number, containerWidth: number): number => {
+  if (!containerWidth || !duration.value || !isFinite(duration.value)) return 0;
   return Math.max(
     0,
     Math.min((x / containerWidth) * duration.value, duration.value),
   );
 };
 
+// Track if we've done initial setup
+const initialSetupDone = ref(false);
+
 // Video event handlers
 const onLoadedMetadata = () => {
   if (videoRef.value) {
-    duration.value = videoRef.value.duration;
+    // For transcoded videos, ALWAYS use the pre-fetched ffprobe duration
+    // The video element only knows the duration of the current stream segment
+    if (videoInfo.value?.needs_transcode) {
+      if (videoInfo.value.duration) {
+        duration.value = videoInfo.value.duration;
+      }
+    } else {
+      // For native formats, use the video element's duration
+      duration.value = videoRef.value.duration;
+    }
+
     isLoading.value = false;
+
+    // Only do initial setup once (not on subsequent loads from seeking)
+    if (initialSetupDone.value) return;
+    initialSetupDone.value = true;
 
     // If initial time is provided, seek to it and set selection there
     const startTime = props.initialTime ?? 0;
     const clampedStart = Math.min(
       startTime,
-      duration.value - DEFAULT_SELECTION_DURATION,
+      Math.max(0, duration.value - DEFAULT_SELECTION_DURATION),
     );
 
     selectionStart.value = Math.max(0, clampedStart);
@@ -130,8 +170,13 @@ const onLoadedMetadata = () => {
 
     // Seek video to initial time
     if (props.initialTime && props.initialTime > 0) {
-      videoRef.value.currentTime = clampedStart;
-      currentTime.value = clampedStart;
+      if (videoInfo.value?.needs_transcode) {
+        // For transcoded videos, reload with the start time
+        seekTranscoded(clampedStart);
+      } else {
+        videoRef.value.currentTime = clampedStart;
+        currentTime.value = clampedStart;
+      }
       // Center timeline on initial position
       timelineOffset.value = Math.max(
         0,
@@ -143,12 +188,18 @@ const onLoadedMetadata = () => {
 
 const onTimeUpdate = () => {
   if (videoRef.value) {
-    currentTime.value = videoRef.value.currentTime;
+    // For transcoded videos, add the stream offset to get the real time
+    currentTime.value = videoRef.value.currentTime + streamStartOffset.value;
 
     // Loop within selection ONLY in preview mode
     if (isPreviewMode.value && hasSelection.value) {
       if (currentTime.value >= selectionEnd.value!) {
-        videoRef.value.currentTime = selectionStart.value!;
+        // For transcoded videos, need to reload at selection start
+        if (videoInfo.value?.needs_transcode) {
+          seekTranscoded(selectionStart.value!);
+        } else {
+          videoRef.value.currentTime = selectionStart.value!;
+        }
       }
     }
 
@@ -170,6 +221,9 @@ const onTimeUpdate = () => {
   }
 };
 
+// Track if video has ended (for transcoded streams)
+const videoEnded = ref(false);
+
 // Video controls
 const togglePlay = () => {
   if (!videoRef.value) return;
@@ -178,6 +232,12 @@ const togglePlay = () => {
     videoRef.value.pause();
     isPlaying.value = false;
   } else {
+    // For transcoded videos that have ended, restart from beginning
+    if (videoInfo.value?.needs_transcode && videoEnded.value) {
+      videoEnded.value = false;
+      seekTranscoded(0);
+      return; // seekTranscoded will handle playback
+    }
     videoRef.value.play();
     isPlaying.value = true;
   }
@@ -187,12 +247,54 @@ const exitPreviewMode = () => {
   isPreviewMode.value = false;
 };
 
+// Build stream URL with optional start time for transcoded seeking
+const getStreamUrl = (startTime: number = 0) => {
+  let url = `/api/files/stream?path=${encodeURIComponent(props.videoPath)}`;
+  if (startTime > 0) {
+    url += `&start=${startTime}`;
+  }
+  return url;
+};
+
+// Seek for transcoded videos by reloading the stream at a new position
+const seekTranscoded = (time: number) => {
+  if (!videoRef.value) return;
+
+  const clampedTime = Math.max(0, Math.min(time, duration.value));
+  const wasPlaying = isPlaying.value;
+
+  // Reset ended state when seeking
+  videoEnded.value = false;
+
+  // Update offset and reload stream
+  streamStartOffset.value = clampedTime;
+  videoRef.value.src = getStreamUrl(clampedTime);
+  videoRef.value.load();
+  currentTime.value = clampedTime;
+
+  // Resume playback after loading
+  videoRef.value.oncanplay = () => {
+    if (wasPlaying && videoRef.value) {
+      videoRef.value.play();
+    }
+    if (videoRef.value) {
+      videoRef.value.oncanplay = null;
+    }
+  };
+};
+
 const seek = (time: number) => {
   if (videoRef.value) {
     const clampedTime = Math.max(0, Math.min(time, duration.value));
-    videoRef.value.currentTime = clampedTime;
-    currentTime.value = clampedTime;
     exitPreviewMode();
+
+    // For transcoded videos, reload the stream at the new position
+    if (videoInfo.value?.needs_transcode) {
+      seekTranscoded(clampedTime);
+    } else {
+      videoRef.value.currentTime = clampedTime;
+      currentTime.value = clampedTime;
+    }
 
     // Adjust timeline if seeked position is outside visible range
     if (clampedTime < visibleStart.value || clampedTime > visibleEnd.value) {
@@ -275,6 +377,9 @@ const showSkipIndicator = (side: "left" | "right") => {
   }
 };
 
+// Pending seek time for transcoded videos (only seek on mouseup to avoid constant reloading)
+const pendingSeekTime = ref<number | null>(null);
+
 // Seekbar interaction
 const onSeekbarMouseDown = (e: MouseEvent) => {
   if (!seekbarRef.value) return;
@@ -282,7 +387,14 @@ const onSeekbarMouseDown = (e: MouseEvent) => {
   const rect = seekbarRef.value.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const time = seekbarPositionToTime(x, rect.width);
-  seek(time);
+
+  // For transcoded videos, just update visual position; actual seek on mouseup
+  if (videoInfo.value?.needs_transcode) {
+    pendingSeekTime.value = time;
+    currentTime.value = time; // Update visual position
+  } else {
+    seek(time);
+  }
 
   dragType.value = "seekbar";
   isDragging.value = true;
@@ -298,11 +410,23 @@ const onSeekbarMouseMove = (e: MouseEvent) => {
   const rect = seekbarRef.value.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const time = seekbarPositionToTime(x, rect.width);
-  seek(time);
+
+  // For transcoded videos, just update visual position; actual seek on mouseup
+  if (videoInfo.value?.needs_transcode) {
+    pendingSeekTime.value = time;
+    currentTime.value = time; // Update visual position
+  } else {
+    seek(time);
+  }
 };
 
 const onSeekbarMouseUp = () => {
   if (dragType.value === "seekbar") {
+    // For transcoded videos, now actually seek to the pending position
+    if (videoInfo.value?.needs_transcode && pendingSeekTime.value !== null) {
+      seekTranscoded(pendingSeekTime.value);
+      pendingSeekTime.value = null;
+    }
     isDragging.value = false;
     dragType.value = null;
   }
@@ -542,8 +666,26 @@ const centerTimelineOnPlayhead = () => {
   );
 };
 
-onMounted(() => {
+// Fetch video info (duration) before loading - needed for transcoded videos
+const fetchVideoInfo = async () => {
+  try {
+    const response = await fetch(
+      `/api/files/video-info?path=${encodeURIComponent(props.videoPath)}`,
+    );
+    if (response.ok) {
+      videoInfo.value = await response.json();
+    }
+  } catch (e) {
+    console.warn("Failed to fetch video info:", e);
+  }
+  // Mark as loaded so video can start loading
+  videoInfoLoaded.value = true;
+};
+
+onMounted(async () => {
   window.addEventListener("keydown", onKeydown);
+  // Fetch video info first to get duration for transcoded videos
+  await fetchVideoInfo();
 });
 
 onUnmounted(() => {
@@ -566,13 +708,14 @@ onUnmounted(() => {
     >
       <video
         ref="videoRef"
-        :src="`/api/files/stream?path=${encodeURIComponent(videoPath)}`"
+        :src="videoInfoLoaded ? getStreamUrl() : undefined"
         class="w-full aspect-video"
         @loadedmetadata="onLoadedMetadata"
         @timeupdate="onTimeUpdate"
         @ended="
           isPlaying = false;
           isPreviewMode = false;
+          if (videoInfo?.needs_transcode) videoEnded = true;
         "
         @pause="onVideoPause"
         @play="onVideoPlay"
@@ -639,24 +782,26 @@ onUnmounted(() => {
       <!-- Seekbar -->
       <div
         ref="seekbarRef"
-        class="flex-1 relative h-2 bg-noche-800 rounded-full cursor-pointer group"
+        class="flex-1 relative h-2 bg-noche-800 rounded-full cursor-pointer group min-w-0"
         @mousedown="onSeekbarMouseDown"
       >
         <div
           class="absolute top-0 left-0 h-full bg-noche-600 rounded-full"
-          :style="{ width: `${(currentTime / duration) * 100}%` }"
+          :style="{ width: `${safePercent(currentTime, duration)}%` }"
         />
         <div
           v-if="hasSelection"
           class="absolute top-0 h-full bg-sol-500/40 rounded-full"
           :style="{
-            left: `${(selectionStart! / duration) * 100}%`,
-            width: `${((selectionEnd! - selectionStart!) / duration) * 100}%`,
+            left: `${safePercent(selectionStart!, duration)}%`,
+            width: `${safePercent(selectionEnd! - selectionStart!, duration)}%`,
           }"
         />
         <div
           class="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-sol-400 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow"
-          :style="{ left: `calc(${(currentTime / duration) * 100}% - 6px)` }"
+          :style="{
+            left: `calc(${safePercent(currentTime, duration)}% - 6px)`,
+          }"
         />
       </div>
 
@@ -771,7 +916,7 @@ onUnmounted(() => {
         class="absolute top-0 bottom-0 bg-sol-500/30 border-l-2 border-r-2 border-sol-500"
         :style="{
           left: `${timeToPosition(selectionStart!, timelineRef?.clientWidth || 300)}px`,
-          width: `${timeToPosition(selectionEnd!, timelineRef?.clientWidth || 300) - timeToPosition(selectionStart!, timelineRef?.clientWidth || 300)}px`,
+          width: `${Math.max(0, timeToPosition(selectionEnd!, timelineRef?.clientWidth || 300) - timeToPosition(selectionStart!, timelineRef?.clientWidth || 300))}px`,
         }"
       >
         <!-- Start Handle -->

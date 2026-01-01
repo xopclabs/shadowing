@@ -114,13 +114,23 @@ async def list_directory(
     )
 
 
+# Formats that browsers can play natively (container + typical codec combos)
+BROWSER_NATIVE_FORMATS = {'.mp4', '.webm', '.m4v'}
+
+
 @router.get('/files/stream')
 async def stream_file(
     path: str = Query(..., description='File path to stream'),
+    transcode: bool = Query(True, description='Transcode non-native formats'),
+    start: float = Query(0, description='Start time in seconds for seeking (transcoded only)'),
 ):
     """
     Stream a video file for playback.
+    Automatically transcodes non-browser-native formats (mkv, avi, etc.) to MP4.
+    Supports seeking via the 'start' parameter for transcoded streams.
     """
+    from fastapi.responses import StreamingResponse
+    
     file_path = Path(path).resolve()
     
     if not is_path_allowed(str(file_path)):
@@ -132,7 +142,10 @@ async def stream_file(
     if not file_path.is_file():
         raise HTTPException(status_code=400, detail='Path is not a file')
     
-    # Determine media type
+    ext = file_path.suffix.lower()
+    
+    # If it's a browser-native format, serve directly
+    if ext in BROWSER_NATIVE_FORMATS or not transcode:
     ext_to_media = {
         '.mp4': 'video/mp4',
         '.mkv': 'video/x-matroska',
@@ -143,12 +156,56 @@ async def stream_file(
         '.wmv': 'video/x-ms-wmv',
         '.flv': 'video/x-flv',
     }
-    media_type = ext_to_media.get(file_path.suffix.lower(), 'video/mp4')
+        media_type = ext_to_media.get(ext, 'video/mp4')
     
     return FileResponse(
         file_path,
         media_type=media_type,
         filename=file_path.name,
+        )
+    
+    # For non-native formats, transcode on the fly to MP4
+    async def transcode_stream():
+        cmd = [
+            'ffmpeg',
+            '-ss', str(max(0, start)),  # Seek before input for faster seeking
+            '-i', str(file_path),
+            '-c:v', 'libx264',
+            '-preset', 'ultrafast',
+            '-tune', 'zerolatency',
+            '-crf', '23',
+            '-c:a', 'aac',
+            '-b:a', '128k',
+            '-movflags', 'frag_keyframe+empty_moov+faststart',
+            '-f', 'mp4',
+            '-v', 'error',
+            'pipe:1',
+        ]
+        
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        
+        try:
+            while True:
+                chunk = await process.stdout.read(65536)  # 64KB chunks
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+    
+    return StreamingResponse(
+        transcode_stream(),
+        media_type='video/mp4',
+        headers={
+            'Content-Disposition': f'inline; filename="{file_path.stem}.mp4"',
+            'X-Start-Time': str(start),  # Tell client the start offset
+        },
     )
 
 
@@ -176,6 +233,68 @@ async def get_file_info(
         'size': stat.st_size if file_path.is_file() else None,
         'extension': file_path.suffix.lower() if file_path.is_file() else None,
         'modified': stat.st_mtime,
+    }
+
+
+async def get_video_duration(file_path: Path) -> Optional[float]:
+    """Get video duration using ffprobe."""
+    import json
+    
+    cmd = [
+        'ffprobe',
+        '-v', 'quiet',
+        '-print_format', 'json',
+        '-show_format',
+        str(file_path),
+    ]
+    
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        
+        stdout, _ = await process.communicate()
+        
+        if process.returncode == 0 and stdout:
+            data = json.loads(stdout.decode())
+            duration_str = data.get('format', {}).get('duration')
+            if duration_str:
+                return float(duration_str)
+    except (FileNotFoundError, json.JSONDecodeError, ValueError):
+        pass
+    
+    return None
+
+
+@router.get('/files/video-info')
+async def get_video_info(
+    path: str = Query(..., description='Video file path'),
+):
+    """
+    Get video information including duration using ffprobe.
+    """
+    file_path = Path(path).resolve()
+    
+    if not is_path_allowed(str(file_path)):
+        raise HTTPException(status_code=403, detail='Access denied')
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail='File not found')
+    
+    if not is_video_file(file_path):
+        raise HTTPException(status_code=400, detail='Not a video file')
+    
+    ext = file_path.suffix.lower()
+    duration = await get_video_duration(file_path)
+    
+    return {
+        'name': file_path.name,
+        'path': str(file_path),
+        'extension': ext,
+        'duration': duration,
+        'needs_transcode': ext not in BROWSER_NATIVE_FORMATS,
     }
 
 
