@@ -1,5 +1,5 @@
 {
-  description = "Shadowing - Spanish pronunciation practice app";
+  description = "Shadowing - vibecoded Spanish pronunciation practice app (personal use)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
