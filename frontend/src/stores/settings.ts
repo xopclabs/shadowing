@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
+import { api, type ServerSettings } from "@/api/client";
 
 export type DisplayMode = "spectrogram" | "waveform" | "backend";
 
@@ -78,6 +79,40 @@ export const useSettingsStore = defineStore("settings", () => {
       displayMode.value === "spectrogram" ? "waveform" : "spectrogram";
   };
 
+  // Server settings (fetched from backend)
+  const serverSettings = ref<ServerSettings | null>(null);
+  const serverSettingsLoading = ref(false);
+  const serverSettingsError = ref<string | null>(null);
+
+  const fetchServerSettings = async () => {
+    serverSettingsLoading.value = true;
+    serverSettingsError.value = null;
+    try {
+      serverSettings.value = await api.getServerSettings();
+    } catch (e) {
+      console.error("Failed to load server settings:", e);
+      serverSettingsError.value =
+        e instanceof Error ? e.message : "Failed to load settings";
+    } finally {
+      serverSettingsLoading.value = false;
+    }
+  };
+
+  const updateServerSettings = async (settings: Partial<ServerSettings>) => {
+    serverSettingsLoading.value = true;
+    serverSettingsError.value = null;
+    try {
+      serverSettings.value = await api.updateServerSettings(settings);
+    } catch (e) {
+      console.error("Failed to update server settings:", e);
+      serverSettingsError.value =
+        e instanceof Error ? e.message : "Failed to update settings";
+      throw e;
+    } finally {
+      serverSettingsLoading.value = false;
+    }
+  };
+
   return {
     displayMode,
     speedModifier,
@@ -86,5 +121,11 @@ export const useSettingsStore = defineStore("settings", () => {
     silenceBetweenReps,
     setDisplayMode,
     toggleDisplayMode,
+    // Server settings
+    serverSettings,
+    serverSettingsLoading,
+    serverSettingsError,
+    fetchServerSettings,
+    updateServerSettings,
   };
 });

@@ -37,7 +37,7 @@
         # Wrapper script to run the backend
         backend = pkgs.writeShellApplication {
           name = "shadowing-backend";
-          runtimeInputs = [ pythonEnv pkgs.ffmpeg ];
+          runtimeInputs = [ pythonEnv pkgs.ffmpeg pkgs.yt-dlp ];
           text = ''
             cd ${backendSrc}
             exec ${pythonEnv}/bin/uvicorn app.main:app "$@"
@@ -87,6 +87,7 @@
             
             # System tools
             ffmpeg
+            yt-dlp
             git
             
             # Python dependencies for development
@@ -223,9 +224,10 @@
             
             # Create data directories
             systemd.tmpfiles.rules = [
-              "d ${cfg.dataDir} 0750 ${cfg.user} ${cfg.group} -"
-              "d ${cfg.dataDir}/recordings 0750 ${cfg.user} ${cfg.group} -"
-              "d ${cfg.dataDir}/clips 0750 ${cfg.user} ${cfg.group} -"
+              "d ${cfg.dataDir} 0777 ${cfg.user} ${cfg.group} -"
+              "d ${cfg.dataDir}/recordings 0777 ${cfg.user} ${cfg.group} -"
+              "d ${cfg.dataDir}/clips 0777 ${cfg.user} ${cfg.group} -"
+              "d ${cfg.dataDir}/youtube 0777 ${cfg.user} ${cfg.group} -"
             ];
           };
         };

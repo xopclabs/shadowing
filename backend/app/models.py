@@ -88,6 +88,27 @@ class RecentFile(Base):
     last_used: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow
     )
+    # Source: 'youtube' or 'media'
+    source: Mapped[str] = mapped_column(String(32), default='media')
+    # Thumbnail URL for YouTube videos
+    thumbnail_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
 
     # Relationships
     video: Mapped['Video'] = relationship('Video', back_populates='recent_files')
+
+
+class YouTubeDownload(Base):
+    """Tracks downloaded YouTube videos."""
+    __tablename__ = 'youtube_downloads'
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    video_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(512))
+    file_path: Mapped[str] = mapped_column(String(1024))
+    thumbnail_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    duration: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    uploader: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    is_audio_only: Mapped[bool] = mapped_column(Integer, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow
+    )

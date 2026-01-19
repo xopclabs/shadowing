@@ -9,7 +9,8 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import init_db
-from app.api import clips, files, recordings, sessions, spectrogram
+from app.api import clips, files, recordings, sessions, spectrogram, youtube
+from app.api import settings as settings_api
 
 
 @asynccontextmanager
@@ -45,6 +46,8 @@ app.include_router(clips.router, prefix=settings.api_prefix, tags=['clips'])
 app.include_router(sessions.router, prefix=settings.api_prefix, tags=['sessions'])
 app.include_router(files.router, prefix=settings.api_prefix, tags=['files'])
 app.include_router(spectrogram.router, prefix=settings.api_prefix, tags=['spectrogram'])
+app.include_router(settings_api.router, prefix=settings.api_prefix, tags=['settings'])
+app.include_router(youtube.router, prefix=settings.api_prefix, tags=['youtube'])
 
 
 # Health check endpoint (before static files catch-all)

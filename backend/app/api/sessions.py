@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_session
-from app.models import Recording, Clip, Video, RecentFile
+from app.models import Recording, Clip, Video, RecentFile, YouTubeDownload
 from app.schemas import (
     OverallStats,
     RecentFileResponse,
@@ -95,15 +95,17 @@ async def get_stats(
 @router.get('/recent-files', response_model=RecentFileListResponse)
 async def list_recent_files(
     limit: int = 10,
+    source: str = None,
     db: AsyncSession = Depends(get_session),
 ):
-    """List recently practiced video files."""
-    result = await db.execute(
-        select(RecentFile)
-        .join(Video, Video.id == RecentFile.video_id)
-        .order_by(RecentFile.last_used.desc())
-        .limit(limit)
-    )
+    """List recently practiced video files, optionally filtered by source."""
+    query = select(RecentFile).join(Video, Video.id == RecentFile.video_id)
+
+    if source:
+        query = query.where(RecentFile.source == source)
+
+    query = query.order_by(RecentFile.last_used.desc()).limit(limit)
+    result = await db.execute(query)
     recent = result.scalars().all()
 
     files = []
@@ -121,6 +123,8 @@ async def list_recent_files(
                 filename=filename,
                 last_timestamp=rf.last_timestamp,
                 last_used=rf.last_used,
+                source=rf.source,
+                thumbnail_url=rf.thumbnail_url,
             ))
 
     return RecentFileListResponse(recent_files=files)
@@ -158,12 +162,17 @@ async def add_recent_file(
         # Update existing
         recent.last_timestamp = data.last_timestamp
         recent.last_used = datetime.utcnow()
+        recent.source = data.source
+        if data.thumbnail_url:
+            recent.thumbnail_url = data.thumbnail_url
     else:
         # Create new
         recent = RecentFile(
             video_id=video.id,
             last_timestamp=data.last_timestamp,
             last_used=datetime.utcnow(),
+            source=data.source,
+            thumbnail_url=data.thumbnail_url,
         )
         db.add(recent)
 
@@ -176,6 +185,8 @@ async def add_recent_file(
         filename=Path(video.path).name,
         last_timestamp=recent.last_timestamp,
         last_used=recent.last_used,
+        source=recent.source,
+        thumbnail_url=recent.thumbnail_url,
     )
 
 
@@ -280,6 +291,7 @@ async def clear_database(
     await db.execute(delete(RecentFile))
     await db.execute(delete(Clip))
     await db.execute(delete(Video))
+    await db.execute(delete(YouTubeDownload))
 
     await db.commit()
 

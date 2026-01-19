@@ -1,8 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useSessionStore } from "@/stores/session";
-import { api, type RecentFile } from "@/api/client";
+import {
+  api,
+  type RecentFile,
+  type YouTubeVideoInfo,
+  type YouTubeDownloadResult,
+  type YouTubeDownloadRecord,
+} from "@/api/client";
 import FileBrowser from "@/components/FileBrowser.vue";
 import ClipSelector from "@/components/ClipSelector.vue";
 
@@ -10,6 +16,10 @@ const router = useRouter();
 const sessionStore = useSessionStore();
 
 const LAST_DIR_KEY = "shadowing_last_directory";
+
+// Category tabs
+type Category = "youtube" | "media";
+const activeCategory = ref<Category>("youtube");
 
 // UI State
 const mode = ref<"browse" | "select">("browse");
@@ -19,13 +29,36 @@ const videoPath = ref("");
 const initialTime = ref<number | undefined>(undefined);
 const lastDirectory = ref("/mnt");
 
-// Recent files (from API)
+// Recent files (from API) - mixed
 const recentFiles = ref<RecentFile[]>([]);
 const loadingRecent = ref(false);
+
+// YouTube downloads list
+const youtubeDownloads = ref<YouTubeDownloadRecord[]>([]);
+const loadingDownloads = ref(false);
+
+// YouTube download form state
+const youtubeUrl = ref("");
+const youtubeAudioOnly = ref(false);
+const youtubeInfo = ref<YouTubeVideoInfo | null>(null);
+const youtubeLoading = ref(false);
+const youtubeDownloading = ref(false);
+const youtubeError = ref("");
+const youtubeSuccess = ref<YouTubeDownloadResult | null>(null);
 
 // Loading state
 const isLoading = ref(false);
 const errorMessage = ref("");
+
+// Filtered recent files based on active category
+const filteredRecentFiles = computed(() => {
+  if (mode.value === "select") {
+    // When in select mode, show only files from active category
+    return recentFiles.value.filter((f) => f.source === activeCategory.value);
+  }
+  // In browse mode, show all recent files
+  return recentFiles.value;
+});
 
 // Load data
 onMounted(async () => {
@@ -35,6 +68,12 @@ onMounted(async () => {
   }
 
   // Load recent files from API
+  await loadRecentFiles();
+  // Load YouTube downloads
+  await loadYouTubeDownloads();
+});
+
+const loadRecentFiles = async () => {
   loadingRecent.value = true;
   try {
     recentFiles.value = await api.listRecentFiles();
@@ -43,7 +82,18 @@ onMounted(async () => {
   } finally {
     loadingRecent.value = false;
   }
-});
+};
+
+const loadYouTubeDownloads = async () => {
+  loadingDownloads.value = true;
+  try {
+    youtubeDownloads.value = await api.listYouTubeDownloads();
+  } catch (e) {
+    console.warn("Failed to load YouTube downloads:", e);
+  } finally {
+    loadingDownloads.value = false;
+  }
+};
 
 // Format time for display
 const formatTime = (seconds: number): string => {
@@ -52,9 +102,21 @@ const formatTime = (seconds: number): string => {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 };
 
+const formatDuration = (seconds: number | null): string => {
+  if (!seconds) return "";
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  if (mins >= 60) {
+    const hours = Math.floor(mins / 60);
+    const remainingMins = mins % 60;
+    return `${hours}:${remainingMins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  }
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+};
+
 const handleFileSelected = (path: string) => {
   videoPath.value = path;
-  initialTime.value = undefined; // Fresh file, start from beginning
+  initialTime.value = undefined;
 
   // Save the directory of the selected file
   const lastSlash = path.lastIndexOf("/");
@@ -69,7 +131,16 @@ const handleFileSelected = (path: string) => {
 
 const handleRecentFileSelected = (file: RecentFile) => {
   videoPath.value = file.video_path;
-  initialTime.value = file.last_timestamp; // Resume from last position
+  initialTime.value = file.last_timestamp;
+  // Switch to the category of the selected file
+  activeCategory.value = file.source;
+  mode.value = "select";
+};
+
+const handleYouTubeDownloadSelected = (download: YouTubeDownloadRecord) => {
+  videoPath.value = download.file_path;
+  initialTime.value = undefined;
+  activeCategory.value = "youtube";
   mode.value = "select";
 };
 
@@ -83,8 +154,23 @@ const handleClipSelected = async (start: number, end: number) => {
   errorMessage.value = "";
 
   try {
-    // Save to recent files via API
-    await api.addRecentFile(videoPath.value, start);
+    // Determine thumbnail URL for YouTube videos
+    let thumbnailUrl: string | undefined;
+    if (activeCategory.value === "youtube") {
+      // Find the download record to get thumbnail
+      const download = youtubeDownloads.value.find(
+        (d) => d.file_path === videoPath.value,
+      );
+      thumbnailUrl = download?.thumbnail_url || undefined;
+    }
+
+    // Save to recent files via API with source
+    await api.addRecentFile(
+      videoPath.value,
+      start,
+      activeCategory.value,
+      thumbnailUrl,
+    );
 
     // Refresh recent files list
     recentFiles.value = await api.listRecentFiles();
@@ -109,6 +195,63 @@ const goBack = () => {
   initialTime.value = undefined;
 };
 
+// YouTube download functions
+const fetchYouTubeInfo = async () => {
+  if (!youtubeUrl.value.trim()) return;
+
+  youtubeLoading.value = true;
+  youtubeError.value = "";
+  youtubeInfo.value = null;
+  youtubeSuccess.value = null;
+
+  try {
+    youtubeInfo.value = await api.getYouTubeVideoInfo(youtubeUrl.value.trim());
+  } catch (e) {
+    youtubeError.value =
+      e instanceof Error ? e.message : "Failed to fetch video info";
+  } finally {
+    youtubeLoading.value = false;
+  }
+};
+
+const downloadYouTube = async () => {
+  if (!youtubeUrl.value.trim()) return;
+
+  youtubeDownloading.value = true;
+  youtubeError.value = "";
+  youtubeSuccess.value = null;
+
+  try {
+    const result = await api.downloadYouTubeVideo(
+      youtubeUrl.value.trim(),
+      youtubeAudioOnly.value,
+    );
+
+    if (result.success) {
+      youtubeSuccess.value = result;
+      // Reset form after successful download
+      youtubeUrl.value = "";
+      youtubeInfo.value = null;
+      // Refresh downloads list
+      await loadYouTubeDownloads();
+    } else {
+      youtubeError.value = result.error || "Download failed";
+    }
+  } catch (e) {
+    youtubeError.value =
+      e instanceof Error ? e.message : "Failed to download video";
+  } finally {
+    youtubeDownloading.value = false;
+  }
+};
+
+const resetYouTubeForm = () => {
+  youtubeUrl.value = "";
+  youtubeInfo.value = null;
+  youtubeError.value = "";
+  youtubeSuccess.value = null;
+};
+
 // Carousel scroll
 const carouselRef = ref<HTMLDivElement | null>(null);
 
@@ -119,6 +262,15 @@ const scrollCarousel = (direction: "left" | "right") => {
     left: direction === "left" ? -scrollAmount : scrollAmount,
     behavior: "smooth",
   });
+};
+
+// Get thumbnail URL for a recent file
+const getRecentFileThumbnail = (file: RecentFile): string => {
+  if (file.source === "youtube" && file.thumbnail_url) {
+    return file.thumbnail_url;
+  }
+  // For media files, use the backend thumbnail endpoint
+  return api.getThumbnailUrl(file.video_path, file.last_timestamp);
 };
 </script>
 
@@ -132,7 +284,7 @@ const scrollCarousel = (direction: "left" | "right") => {
       <p class="text-tierra-400 text-center">{{ errorMessage }}</p>
     </div>
 
-    <!-- Back Button -->
+    <!-- Back Button (when selecting clip) -->
     <button
       v-if="mode === 'select'"
       @click="goBack"
@@ -151,12 +303,12 @@ const scrollCarousel = (direction: "left" | "right") => {
           d="M15 19l-7-7 7-7"
         />
       </svg>
-      Back to files
+      Back to {{ activeCategory === "youtube" ? "YouTube" : "Media" }}
     </button>
 
-    <!-- Mode: File Browser -->
+    <!-- Main Content -->
     <template v-if="mode === 'browse'">
-      <!-- Recent Files Carousel -->
+      <!-- Recent Files Carousel (shows all) -->
       <div v-if="recentFiles.length > 0" class="space-y-3">
         <div class="flex items-center justify-between">
           <h2 class="text-sm font-medium text-noche-400">Recent Files</h2>
@@ -214,7 +366,7 @@ const scrollCarousel = (direction: "left" | "right") => {
             <div
               class="relative h-24 rounded-xl bg-noche-800 border border-noche-700 overflow-hidden transition-all group-hover:border-sol-500/50"
             >
-              <!-- Fallback icon (behind thumbnail) -->
+              <!-- Fallback icon -->
               <div
                 class="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-noche-700 to-noche-800 z-0"
               >
@@ -233,13 +385,26 @@ const scrollCarousel = (direction: "left" | "right") => {
                 </svg>
               </div>
 
-              <!-- Thumbnail (on top of fallback) -->
+              <!-- Thumbnail -->
               <img
-                :src="api.getThumbnailUrl(file.video_path, file.last_timestamp)"
+                :src="getRecentFileThumbnail(file)"
                 :alt="file.filename"
                 class="absolute inset-0 w-full h-full object-cover z-10"
                 loading="lazy"
+                @error="($event.target as HTMLImageElement).style.display = 'none'"
               />
+
+              <!-- Source badge -->
+              <div
+                class="absolute top-2 left-2 px-1.5 py-0.5 rounded text-[10px] font-medium z-20"
+                :class="
+                  file.source === 'youtube'
+                    ? 'bg-tierra-500/90 text-white'
+                    : 'bg-noche-700/90 text-noche-300'
+                "
+              >
+                {{ file.source === "youtube" ? "YT" : "Media" }}
+              </div>
 
               <!-- Resume indicator -->
               <div
@@ -273,14 +438,265 @@ const scrollCarousel = (direction: "left" | "right") => {
         ></div>
       </div>
 
-      <!-- File Browser -->
-      <div class="card">
-        <FileBrowser
-          :initial-path="lastDirectory"
-          :videos-only="true"
-          @file-selected="handleFileSelected"
-        />
+      <!-- Category Tabs -->
+      <div class="flex gap-2 p-1 bg-noche-800/50 rounded-xl">
+        <button
+          @click="activeCategory = 'youtube'"
+          class="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg font-medium transition-all"
+          :class="
+            activeCategory === 'youtube'
+              ? 'bg-tierra-500 text-white'
+              : 'text-noche-400 hover:text-noche-200 hover:bg-noche-700/50'
+          "
+        >
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+            <path
+              d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"
+            />
+          </svg>
+          YouTube
+        </button>
+        <button
+          @click="activeCategory = 'media'"
+          class="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg font-medium transition-all"
+          :class="
+            activeCategory === 'media'
+              ? 'bg-sol-500 text-noche-950'
+              : 'text-noche-400 hover:text-noche-200 hover:bg-noche-700/50'
+          "
+        >
+          <svg
+            class="w-5 h-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+            />
+          </svg>
+          Media
+        </button>
       </div>
+
+      <!-- YouTube Tab Content -->
+      <template v-if="activeCategory === 'youtube'">
+        <!-- YouTube Downloader -->
+        <div class="card space-y-4">
+          <h3 class="font-medium text-noche-100">Download from YouTube</h3>
+
+          <!-- URL Input -->
+          <div>
+            <div class="flex gap-2">
+              <input
+                v-model="youtubeUrl"
+                type="text"
+                placeholder="https://www.youtube.com/watch?v=..."
+                class="input flex-1"
+                @keydown.enter="fetchYouTubeInfo"
+              />
+              <button
+                @click="fetchYouTubeInfo"
+                :disabled="!youtubeUrl.trim() || youtubeLoading"
+                class="btn btn-secondary px-4"
+              >
+                <span v-if="youtubeLoading">...</span>
+                <span v-else>Check</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Error Message -->
+          <div
+            v-if="youtubeError"
+            class="p-3 bg-tierra-500/10 border border-tierra-500/30 rounded-lg"
+          >
+            <p class="text-sm text-tierra-400">{{ youtubeError }}</p>
+          </div>
+
+          <!-- Success Message -->
+          <div
+            v-if="youtubeSuccess"
+            class="p-3 bg-sol-500/10 border border-sol-500/30 rounded-lg"
+          >
+            <p class="text-sm text-sol-400 font-medium">Download complete!</p>
+            <p class="text-xs text-noche-400 mt-1 font-mono truncate">
+              {{ youtubeSuccess.file_path }}
+            </p>
+            <button
+              @click="resetYouTubeForm"
+              class="mt-2 text-xs text-sol-400 hover:text-sol-300"
+            >
+              Download another
+            </button>
+          </div>
+
+          <!-- Video Info Preview -->
+          <div
+            v-if="youtubeInfo && !youtubeSuccess"
+            class="p-3 bg-noche-800 rounded-lg space-y-3"
+          >
+            <div class="flex gap-3">
+              <img
+                v-if="youtubeInfo.thumbnail"
+                :src="youtubeInfo.thumbnail"
+                :alt="youtubeInfo.title"
+                class="w-24 h-auto rounded flex-shrink-0"
+              />
+              <div class="flex-1 min-w-0">
+                <h4 class="text-noche-100 font-medium line-clamp-2">
+                  {{ youtubeInfo.title }}
+                </h4>
+                <p v-if="youtubeInfo.uploader" class="text-xs text-noche-500">
+                  {{ youtubeInfo.uploader }}
+                </p>
+                <p
+                  v-if="youtubeInfo.duration"
+                  class="text-xs text-noche-500 mt-1"
+                >
+                  Duration: {{ formatDuration(youtubeInfo.duration) }}
+                </p>
+              </div>
+            </div>
+
+            <!-- Download Options -->
+            <div class="flex items-center gap-4">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  v-model="youtubeAudioOnly"
+                  class="w-4 h-4 rounded border-noche-600 bg-noche-700 text-sol-500"
+                />
+                <span class="text-sm text-noche-300">Audio only (MP3)</span>
+              </label>
+            </div>
+
+            <!-- Download Button -->
+            <button
+              @click="downloadYouTube"
+              :disabled="youtubeDownloading"
+              class="btn btn-primary w-full"
+            >
+              <span v-if="youtubeDownloading" class="flex items-center gap-2">
+                <div
+                  class="w-4 h-4 border-2 border-noche-950 border-t-transparent rounded-full animate-spin"
+                ></div>
+                Downloading...
+              </span>
+              <span v-else>
+                Download {{ youtubeAudioOnly ? "Audio" : "Video" }}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Downloaded Videos List -->
+        <div class="card">
+          <h3 class="font-medium text-noche-100 mb-4">Downloaded Videos</h3>
+
+          <div v-if="loadingDownloads" class="flex justify-center py-8">
+            <div
+              class="w-6 h-6 border-2 border-sol-500 border-t-transparent rounded-full animate-spin"
+            ></div>
+          </div>
+
+          <div
+            v-else-if="youtubeDownloads.length === 0"
+            class="text-center py-8 text-noche-500"
+          >
+            <svg
+              class="w-12 h-12 mx-auto mb-3 text-noche-700"
+              fill="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"
+              />
+            </svg>
+            <p>No downloaded videos yet</p>
+            <p class="text-xs mt-1">Use the form above to download</p>
+          </div>
+
+          <div v-else class="space-y-2 max-h-[40vh] overflow-y-auto">
+            <button
+              v-for="download in youtubeDownloads"
+              :key="download.id"
+              @click="handleYouTubeDownloadSelected(download)"
+              class="w-full flex items-center gap-3 p-3 rounded-xl bg-noche-800/50 hover:bg-noche-800 transition-colors text-left group"
+            >
+              <!-- Thumbnail -->
+              <div
+                class="w-20 h-12 rounded-lg overflow-hidden flex-shrink-0 bg-noche-700"
+              >
+                <img
+                  v-if="download.thumbnail_url"
+                  :src="download.thumbnail_url"
+                  :alt="download.title"
+                  class="w-full h-full object-cover"
+                />
+                <div
+                  v-else
+                  class="w-full h-full flex items-center justify-center"
+                >
+                  <svg
+                    class="w-6 h-6 text-noche-600"
+                    fill="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                </div>
+              </div>
+
+              <!-- Info -->
+              <div class="flex-1 min-w-0">
+                <p
+                  class="text-noche-100 truncate group-hover:text-white transition-colors"
+                >
+                  {{ download.title }}
+                </p>
+                <div class="flex items-center gap-2 text-xs text-noche-500">
+                  <span v-if="download.duration">{{
+                    formatDuration(download.duration)
+                  }}</span>
+                  <span v-if="download.is_audio_only" class="text-tierra-400"
+                    >Audio</span
+                  >
+                </div>
+              </div>
+
+              <!-- Arrow -->
+              <svg
+                class="w-5 h-5 text-noche-600 group-hover:text-noche-400 transition-colors flex-shrink-0"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M9 5l7 7-7 7"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </template>
+
+      <!-- Media Tab Content -->
+      <template v-else-if="activeCategory === 'media'">
+        <div class="card">
+          <FileBrowser
+            :initial-path="lastDirectory"
+            :videos-only="true"
+            @file-selected="handleFileSelected"
+          />
+        </div>
+      </template>
     </template>
 
     <!-- Mode: Clip Selection -->

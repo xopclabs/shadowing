@@ -78,6 +78,8 @@ class RecentFileResponse(BaseModel):
     filename: str
     last_timestamp: float
     last_used: datetime
+    source: str = 'media'  # 'media' or 'youtube'
+    thumbnail_url: Optional[str] = None  # For YouTube videos
 
     class Config:
         from_attributes = True
@@ -86,6 +88,8 @@ class RecentFileResponse(BaseModel):
 class RecentFileCreate(BaseModel):
     video_path: str
     last_timestamp: float = 0
+    source: str = 'media'  # 'media' or 'youtube'
+    thumbnail_url: Optional[str] = None  # For YouTube videos
 
 
 class RecentFileListResponse(BaseModel):
@@ -114,3 +118,23 @@ class StorageInfo(BaseModel):
 class DeleteFilesRequest(BaseModel):
     delete_clips: bool = False
     delete_recordings: bool = False
+
+
+# YouTube download schemas
+class YouTubeDownloadResponse(BaseModel):
+    id: int
+    video_id: str
+    title: str
+    file_path: str
+    thumbnail_url: Optional[str] = None
+    duration: Optional[float] = None
+    uploader: Optional[str] = None
+    is_audio_only: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class YouTubeDownloadListResponse(BaseModel):
+    downloads: List[YouTubeDownloadResponse]

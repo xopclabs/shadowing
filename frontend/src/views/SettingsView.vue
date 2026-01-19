@@ -1,9 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, watch } from "vue";
 import { useSettingsStore, type DisplayMode } from "@/stores/settings";
 import { api, type StorageInfo } from "@/api/client";
 
 const settingsStore = useSettingsStore();
+
+// YouTube settings form state
+const proxyUrl = ref("");
+const downloadDir = ref("");
+const savingYouTubeSettings = ref(false);
 
 const displayModeOptions: {
   value: DisplayMode;
@@ -71,7 +76,37 @@ const loadStorageInfo = async () => {
   }
 };
 
-onMounted(loadStorageInfo);
+onMounted(() => {
+  loadStorageInfo();
+  settingsStore.fetchServerSettings();
+});
+
+// Sync form fields when server settings load
+watch(
+  () => settingsStore.serverSettings,
+  (settings) => {
+    if (settings) {
+      proxyUrl.value = settings.socks5_proxy || "";
+      downloadDir.value = settings.youtube_download_dir || "";
+    }
+  },
+  { immediate: true },
+);
+
+const handleSaveYouTubeSettings = async () => {
+  savingYouTubeSettings.value = true;
+  try {
+    await settingsStore.updateServerSettings({
+      socks5_proxy: proxyUrl.value || null,
+      youtube_download_dir: downloadDir.value || null,
+    });
+    showToast("YouTube settings saved!", "success");
+  } catch (e) {
+    showToast("Failed to save YouTube settings.", "error");
+  } finally {
+    savingYouTubeSettings.value = false;
+  }
+};
 
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024) return `${bytes} B`;
@@ -201,6 +236,86 @@ const selectedDeletionCount = (): number => {
             </div>
           </div>
         </button>
+      </div>
+    </div>
+
+    <!-- YouTube Download Settings -->
+    <div class="card">
+      <h2 class="text-lg font-semibold text-noche-100 mb-2">
+        YouTube Downloads
+      </h2>
+      <p class="text-sm text-noche-400 mb-4">
+        Configure YouTube video downloading with yt-dlp.
+      </p>
+
+      <div
+        v-if="settingsStore.serverSettingsLoading && !settingsStore.serverSettings"
+        class="flex items-center justify-center py-4"
+      >
+        <div
+          class="w-5 h-5 border-2 border-sol-500 border-t-transparent rounded-full animate-spin"
+        ></div>
+      </div>
+
+      <div v-else class="space-y-4">
+        <!-- SOCKS5 Proxy -->
+        <div>
+          <label
+            for="proxy-url"
+            class="block text-sm font-medium text-noche-200 mb-1"
+          >
+            SOCKS5 Proxy URL
+          </label>
+          <input
+            id="proxy-url"
+            v-model="proxyUrl"
+            type="text"
+            placeholder="socks5://127.0.0.1:1080"
+            class="w-full px-4 py-2 bg-noche-800 border border-noche-700 rounded-lg text-noche-100 placeholder-noche-500 focus:outline-none focus:border-sol-500 focus:ring-1 focus:ring-sol-500"
+          />
+          <p class="text-xs text-noche-500 mt-1">
+            Optional. Used for downloading videos through a proxy.
+          </p>
+        </div>
+
+        <!-- Download Directory -->
+        <div>
+          <label
+            for="download-dir"
+            class="block text-sm font-medium text-noche-200 mb-1"
+          >
+            Download Directory
+          </label>
+          <input
+            id="download-dir"
+            v-model="downloadDir"
+            type="text"
+            placeholder="/path/to/downloads (defaults to data/youtube)"
+            class="w-full px-4 py-2 bg-noche-800 border border-noche-700 rounded-lg text-noche-100 placeholder-noche-500 focus:outline-none focus:border-sol-500 focus:ring-1 focus:ring-sol-500"
+          />
+          <p class="text-xs text-noche-500 mt-1">
+            Optional. Leave empty to use the default location.
+          </p>
+        </div>
+
+        <!-- Save Button -->
+        <button
+          @click="handleSaveYouTubeSettings"
+          :disabled="savingYouTubeSettings"
+          class="btn btn-primary w-full"
+        >
+          <span v-if="savingYouTubeSettings">Saving...</span>
+          <span v-else>Save YouTube Settings</span>
+        </button>
+
+        <div
+          v-if="settingsStore.serverSettingsError"
+          class="p-3 bg-tierra-500/10 border border-tierra-500/30 rounded-lg"
+        >
+          <p class="text-sm text-tierra-400">
+            {{ settingsStore.serverSettingsError }}
+          </p>
+        </div>
       </div>
     </div>
 

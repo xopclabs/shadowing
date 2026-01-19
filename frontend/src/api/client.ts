@@ -22,6 +22,8 @@ export interface RecentFile {
   filename: string;
   last_timestamp: number;
   last_used: string;
+  source: "youtube" | "media";
+  thumbnail_url: string | null;
 }
 
 interface RecentFilesResponse {
@@ -43,6 +45,40 @@ export interface StorageInfo {
   recordings_count: number;
   recordings_size_bytes: number;
   total_size_bytes: number;
+}
+
+export interface ServerSettings {
+  socks5_proxy: string | null;
+  youtube_download_dir: string | null;
+}
+
+export interface YouTubeVideoInfo {
+  id: string;
+  title: string;
+  duration: number | null;
+  thumbnail: string | null;
+  uploader: string | null;
+  description: string | null;
+}
+
+export interface YouTubeDownloadResult {
+  success: boolean;
+  video_id: string;
+  title: string;
+  file_path: string | null;
+  error: string | null;
+}
+
+export interface YouTubeDownloadRecord {
+  id: number;
+  video_id: string;
+  title: string;
+  file_path: string;
+  thumbnail_url: string | null;
+  duration: number | null;
+  uploader: string | null;
+  is_audio_only: boolean;
+  created_at: string;
 }
 
 class ApiClient {
@@ -135,12 +171,20 @@ class ApiClient {
   }
 
   // Recent Files API
-  async listRecentFiles(): Promise<RecentFile[]> {
-    const response = await this.fetch<RecentFilesResponse>("/recent-files");
+  async listRecentFiles(source?: "youtube" | "media"): Promise<RecentFile[]> {
+    const params = source ? `?source=${source}` : "";
+    const response = await this.fetch<RecentFilesResponse>(
+      `/recent-files${params}`,
+    );
     return response.recent_files;
   }
 
-  async addRecentFile(videoPath: string, lastTimestamp: number): Promise<void> {
+  async addRecentFile(
+    videoPath: string,
+    lastTimestamp: number,
+    source: "youtube" | "media" = "media",
+    thumbnailUrl?: string,
+  ): Promise<void> {
     await this.fetch("/recent-files", {
       method: "POST",
       headers: {
@@ -149,6 +193,8 @@ class ApiClient {
       body: JSON.stringify({
         video_path: videoPath,
         last_timestamp: lastTimestamp,
+        source,
+        thumbnail_url: thumbnailUrl,
       }),
     });
   }
@@ -193,6 +239,66 @@ class ApiClient {
     await this.fetch("/database/clear", {
       method: "POST",
     });
+  }
+
+  // Server Settings API
+  async getServerSettings(): Promise<ServerSettings> {
+    return this.fetch<ServerSettings>("/settings");
+  }
+
+  async updateServerSettings(
+    settings: Partial<ServerSettings>,
+  ): Promise<ServerSettings> {
+    return this.fetch<ServerSettings>("/settings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    });
+  }
+
+  // YouTube API
+  async getYouTubeVideoInfo(url: string): Promise<YouTubeVideoInfo> {
+    return this.fetch<YouTubeVideoInfo>("/youtube/info", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ url }),
+    });
+  }
+
+  async downloadYouTubeVideo(
+    url: string,
+    audioOnly: boolean = false,
+  ): Promise<YouTubeDownloadResult> {
+    return this.fetch<YouTubeDownloadResult>("/youtube/download", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ url, audio_only: audioOnly }),
+    });
+  }
+
+  async listYouTubeDownloads(): Promise<YouTubeDownloadRecord[]> {
+    const response = await this.fetch<{ downloads: YouTubeDownloadRecord[] }>(
+      "/youtube/downloads",
+    );
+    return response.downloads;
+  }
+
+  async deleteYouTubeDownload(
+    downloadId: number,
+    deleteFile: boolean = false,
+  ): Promise<void> {
+    await this.fetch(
+      `/youtube/downloads/${downloadId}?delete_file=${deleteFile}`,
+      {
+        method: "DELETE",
+      },
+    );
   }
 }
 
