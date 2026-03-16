@@ -23,7 +23,7 @@
         };
         
         # Python environment with all dependencies
-        pythonEnv = pkgs.python311.withPackages (ps: with ps; [
+        pythonEnv = pkgs.python3.withPackages (ps: with ps; [
           fastapi
           uvicorn
           sqlalchemy
@@ -78,9 +78,9 @@
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             # Python
-            python311
-            python311Packages.pip
-            python311Packages.virtualenv
+            python3
+            python3Packages.pip
+            python3Packages.virtualenv
             
             # Node.js
             nodejs_20
@@ -91,14 +91,14 @@
             git
             
             # Python dependencies for development
-            python311Packages.uvicorn
-            python311Packages.fastapi
-            python311Packages.sqlalchemy
-            python311Packages.aiosqlite
-            python311Packages.python-multipart
-            python311Packages.pydantic
-            python311Packages.pydantic-settings
-            python311Packages.numpy
+            python3Packages.uvicorn
+            python3Packages.fastapi
+            python3Packages.sqlalchemy
+            python3Packages.aiosqlite
+            python3Packages.python-multipart
+            python3Packages.pydantic
+            python3Packages.pydantic-settings
+            python3Packages.numpy
           ];
           
           shellHook = ''
